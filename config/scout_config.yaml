@@ -1,0 +1,73 @@
+waypoints:
+  home:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    w: 1.0
+  kitchen:
+    x: 3.0
+    y: 1.0
+    z: 0.0
+    w: 1.0
+  living_room:
+    x: 2.0
+    y: -2.0
+    z: 0.0
+    w: 1.0
+  bedroom:
+    x: -2.0
+    y: 2.0
+    z: 0.0
+    w: 1.0
+  charging_station:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    w: 1.0
+
+schedules:
+  - name: morning_patrol
+    time: "08:00"
+    waypoints: [kitchen, living_room, bedroom, home]
+    active: true
+  - name: evening_patrol
+    time: "20:00"
+    waypoints: [living_room, kitchen, bedroom, home]
+    active: true
+
+safety:
+  min_battery_level: 20.0
+  max_obstacle_distance: 0.3
+  emergency_stop_distance: 0.15
+
+lidar:
+  port: "/dev/ttyUSB0"
+  baudrate: 230400
+  frame_id: "base_laser"
+  range_min: 0.02
+  range_max: 12.0
+  angle_min: 0.0
+  angle_max: 6.28318
+  invert_scan: false
+
+camera:
+  device: "/dev/video0"
+  width: 640
+  height: 480
+  fps: 30
+  frame_id: "camera_link"
+
+navigation:
+  max_vel_x: 0.3
+  max_vel_theta: 0.8
+  xy_goal_tolerance: 0.1
+  yaw_goal_tolerance: 0.1
+  planner_frequency: 1.0
+  controller_frequency: 10.0
+
+mapping:
+  map_resolution: 0.05
+  map_update_interval: 5.0
+  particles: 80
+  linear_update: 0.1
+  angular_update: 0.0436

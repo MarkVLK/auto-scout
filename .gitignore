@@ -1,0 +1,124 @@
+# Auto-Scout Project .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ROS
+devel/
+logs/
+build/
+msg_gen/
+srv_gen/
+msg/*Action.msg
+msg/*ActionFeedback.msg
+msg/*ActionGoal.msg
+msg/*ActionResult.msg
+msg/*Feedback.msg
+msg/*Goal.msg
+msg/*Result.msg
+msg/_*.py
+build_isolated/
+devel_isolated/
+
+# Robot-specific
+*.bag
+*.pgm
+*.yaml.backup
+calibration_data/
+robot_logs/
+
+# Generated maps and data
+data/maps/*.pgm
+data/maps/*.yaml
+data/calibration/camera_calibration.npz
+data/samples/test_images/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.log
+
+# Configuration overrides
+config/*_local.yaml
+config/secrets.yaml
+
+# Photos and media
+photos/
+recordings/
+*.jpg
+*.png
+*.mp4
+*.avi
+!examples/**/*.jpg
+!examples/**/*.png

@@ -1,0 +1,39 @@
+# Python dependencies for auto-scout project - Debian Stretch + ARM64 Compatible
+
+# Core ROS Python dependencies (installed via apt on robot)
+# rospy - comes with ROS installation
+# tf2_ros - comes with ROS installation  
+# sensor_msgs - comes with ROS installation
+# geometry_msgs - comes with ROS installation
+# nav_msgs - comes with ROS installation
+
+# Python packages (install with pip) - Debian Stretch/Python 3.5/ARM64 compatible
+numpy>=1.16.0,<1.20.0     # Python 3.5 + ARM64 compatible
+opencv-python>=4.1.0,<4.6.0  # Debian Stretch compatible, ARM64 wheels available
+PyYAML>=5.1.0,<6.0.0      # Python 3.5 compatible
+requests>=2.20.0,<3.0.0   # Debian Stretch compatible
+flask>=1.0.0,<2.0.0       # Python 3.5 compatible
+flask-cors>=3.0.0,<4.0.0  # Stable version for older Python
+pillow>=6.0.0,<8.0.0      # Python 3.5 + ARM64 compatible
+
+# Optional ML dependencies for advanced dog detection
+# Note: PyTorch ARM64 support limited on Debian Stretch
+# torch>=1.4.0,<1.8.0     # ARM64 compatible versions
+# torchvision>=0.5.0,<0.9.0
+
+# Development and testing dependencies  
+pytest>=4.6.0,<6.0.0      # Python 3.5 compatible
+pytest-cov>=2.8.0,<3.0.0  # Stable version
+mock>=3.0.0,<4.0.0        # Python 3.5 compatible
+
+# Web interface dependencies
+jinja2>=2.10.0,<3.0.0     # Python 3.5 compatible
+werkzeug>=1.0.0,<2.0.0    # Python 3.5 compatible  
+flask-socketio>=4.0.0,<5.0.0  # Debian Stretch compatible
+
+# Audio processing for voice commands
+pyaudio>=0.2.11           # Should work on ARM64
+speechrecognition>=3.8.0,<4.0.0  # Stable version
+
+# Serial communication for sensors
+pyserial>=3.4,<4.0.0      # Debian Stretch compatible

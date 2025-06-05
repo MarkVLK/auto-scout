@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scout Robot Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1rem 2rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 10px;
+            background-color: #ff4444;
+            transition: background-color 0.3s;
+        }
+
+        .status-indicator.online {
+            background-color: #44ff44;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-gap: 20px;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: #2a2a2a;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            border: 1px solid #3a3a3a;
+        }
+
+        .panel h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 5px;
+        }
+
+        .video-panel {
+            grid-column: 1 / 3;
+        }
+
+        .camera-feed {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border-radius: 8px;
+            border: 2px solid #3a3a3a;
+            margin: 0 auto;
+            display: block;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .control-group {
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .control-group h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn.emergency {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        }
+
+        .btn.emergency:hover {
+            box-shadow: 0 4px 8px rgba(255, 68, 68, 0.3);
+        }
+
+        .movement-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 5px;
+            max-width: 200px;
+            margin: 0 auto;
+        }
+
+        .move-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .status-item {
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .status-item .label {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        .status-item .value {
+            color: #667eea;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .lidar-canvas {
+            width: 100%;
+            height: 300px;
+            background: #333;
+            border-radius: 8px;
+            border: 2px solid #3a3a3a;
+        }
+
+        .map-canvas {
+            width: 100%;
+            height: 300px;
+            background: #333;
+            border-radius: 8px;
+            border: 2px solid #3a3a3a;
+        }
+
+        .log-container {
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .log-entry.info {
+            color: #4CAF50;
+        }
+
+        .log-entry.warning {
+            color: #FF9800;
+        }
+
+        .log-entry.error {
+            color: #F44336;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .video-panel {
+                grid-column: 1;
+            }
+            
+            .controls {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 Scout Robot Dashboard</h1>
+        <span id="connection-status">Connecting...</span>
+        <div class="status-indicator" id="status-indicator"></div>
+    </div>
+
+    <div class="dashboard">
+        <!-- Camera Feed Panel -->
+        <div class="panel video-panel">
+            <h2>📹 Camera Feed</h2>
+            <img id="camera-feed" class="camera-feed" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Camera feed">
+        </div>
+
+        <!-- Robot Status Panel -->
+        <div class="panel">
+            <h2>📊 Robot Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <div class="label">Battery Level</div>
+                    <div class="value" id="battery-level">---%</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Navigation</div>
+                    <div class="value" id="navigation-status">Idle</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Current Goal</div>
+                    <div class="value" id="current-goal">None</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Emergency Stop</div>
+                    <div class="value" id="emergency-status">Inactive</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="panel">
+            <h2>🎮 Robot Controls</h2>
+            <div class="controls">
+                <div class="control-group">
+                    <h3>Navigation</h3>
+                    <button class="btn" onclick="sendCommand('start_patrol')">Start Patrol</button>
+                    <button class="btn" onclick="sendCommand('stop_patrol')">Stop Patrol</button>
+                    <button class="btn" onclick="sendCommand('go_home')">Go Home</button>
+                </div>
+                
+                <div class="control-group">
+                    <h3>Waypoints</h3>
+                    <button class="btn" onclick="sendCommand('go_kitchen')">Kitchen</button>
+                    <button class="btn" onclick="sendCommand('go_living_room')">Living Room</button>
+                    <button class="btn" onclick="sendCommand('go_bedroom')">Bedroom</button>
+                </div>
+                
+                <div class="control-group">
+                    <h3>System</h3>
+                    <button class="btn" onclick="sendCommand('save_map')">Save Map</button>
+                    <button class="btn emergency" onclick="emergencyStop()">Emergency Stop</button>
+                    <button class="btn" onclick="sendCommand('reset_emergency')">Reset Emergency</button>
+                </div>
+                
+                <div class="control-group">
+                    <h3>Manual Movement</h3>
+                    <div class="movement-controls">
+                        <div></div>
+                        <button class="btn move-btn" onmousedown="startMove(0.3, 0, 0)" onmouseup="stopMove()">↑</button>
+                        <div></div>
+                        <button class="btn move-btn" onmousedown="startMove(0, 0.3, 0)" onmouseup="stopMove()">←</button>
+                        <button class="btn move-btn" onmousedown="stopMove()">⏹</button>
+                        <button class="btn move-btn" onmousedown="startMove(0, -0.3, 0)" onmouseup="stopMove()">→</button>
+                        <div></div>
+                        <button class="btn move-btn" onmousedown="startMove(-0.3, 0, 0)" onmouseup="stopMove()">↓</button>
+                        <div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Lidar Visualization -->
+        <div class="panel">
+            <h2>📡 Lidar Scan</h2>
+            <canvas id="lidar-canvas" class="lidar-canvas"></canvas>
+        </div>
+
+        <!-- Map Visualization -->
+        <div class="panel">
+            <h2>🗺️ SLAM Map</h2>
+            <canvas id="map-canvas" class="map-canvas"></canvas>
+        </div>
+
+        <!-- System Log -->
+        <div class="panel">
+            <h2>📝 System Log</h2>
+            <div id="log-container" class="log-container"></div>
+        </div>
+    </div>
+
+    <script>
+        // Socket.IO connection
+        const socket = io();
+        
+        // Movement interval
+        let moveInterval = null;
+        
+        // Connection status
+        socket.on('connect', function() {
+            document.getElementById('connection-status').textContent = 'Connected';
+            document.getElementById('status-indicator').classList.add('online');
+            addLogEntry('Connected to robot', 'info');
+        });
+        
+        socket.on('disconnect', function() {
+            document.getElementById('connection-status').textContent = 'Disconnected';
+            document.getElementById('status-indicator').classList.remove('online');
+            addLogEntry('Disconnected from robot', 'warning');
+        });
+        
+        // Status updates
+        socket.on('status_update', function(data) {
+            document.getElementById('battery-level').textContent = data.battery_level + '%';
+            document.getElementById('navigation-status').textContent = data.navigation_active ? 'Active' : 'Idle';
+            document.getElementById('current-goal').textContent = data.current_goal || 'None';
+            document.getElementById('emergency-status').textContent = data.emergency_stop ? 'ACTIVE' : 'Inactive';
+            
+            // Update battery color based on level
+            const batteryElement = document.getElementById('battery-level');
+            if (data.battery_level < 20) {
+                batteryElement.style.color = '#ff4444';
+            } else if (data.battery_level < 50) {
+                batteryElement.style.color = '#ffaa44';
+            } else {
+                batteryElement.style.color = '#667eea';
+            }
+        });
+        
+        // Image updates
+        socket.on('image_update', function(data) {
+            const img = document.getElementById('camera-feed');
+            img.src = 'data:image/jpeg;base64,' + data.image;
+        });
+        
+        // Lidar updates
+        socket.on('scan_update', function(data) {
+            drawLidarScan(data);
+        });
+        
+        // Map updates
+        socket.on('map_update', function(data) {
+            drawMap(data);
+        });
+        
+        // Functions
+        function sendCommand(command) {
+            socket.emit('command', {command: command});
+            addLogEntry('Sent command: ' + command, 'info');
+        }
+        
+        function emergencyStop() {
+            fetch('/api/emergency_stop', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({stop: true})
+            });
+            addLogEntry('Emergency stop activated', 'warning');
+        }
+        
+        function startMove(linear_x, linear_y, angular_z) {
+            if (moveInterval) {
+                clearInterval(moveInterval);
+            }
+            
+            moveInterval = setInterval(() => {
+                fetch('/api/move', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        linear_x: linear_x,
+                        linear_y: linear_y,
+                        angular_z: angular_z
+                    })
+                });
+            }, 100); // Send movement commands at 10Hz
+        }
+        
+        function stopMove() {
+            if (moveInterval) {
+                clearInterval(moveInterval);
+                moveInterval = null;
+            }
+            
+            fetch('/api/move', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    linear_x: 0,
+                    linear_y: 0,
+                    angular_z: 0
+                })
+            });
+        }
+        
+        function addLogEntry(message, type = 'info') {
+            const container = document.getElementById('log-container');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.textContent = '[' + timestamp + '] ' + message;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+            
+            // Keep only last 100 entries
+            while (container.children.length > 100) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        
+        function drawLidarScan(scanData) {
+            const canvas = document.getElementById('lidar-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Set up coordinate system
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const scale = Math.min(canvas.width, canvas.height) / (2 * scanData.range_max);
+            
+            // Draw robot at center
+            ctx.fillStyle = '#667eea';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Draw scan points
+            ctx.fillStyle = '#44ff44';
+            for (let i = 0; i < scanData.ranges.length; i++) {
+                const angle = scanData.angle_min + i * scanData.angle_increment;
+                const range = scanData.ranges[i];
+                
+                if (range < scanData.range_max) {
+                    const x = centerX + range * scale * Math.cos(angle);
+                    const y = centerY - range * scale * Math.sin(angle);
+                    
+                    ctx.beginPath();
+                    ctx.arc(x, y, 1, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+        }
+        
+        function drawMap(mapData) {
+            const canvas = document.getElementById('map-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Create image from base64 data
+            const img = new Image();
+            img.onload = function() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            img.src = 'data:image/png;base64,' + mapData.image;
+        }
+        
+        // Initialize canvas sizes
+        window.addEventListener('resize', function() {
+            const lidarCanvas = document.getElementById('lidar-canvas');
+            const mapCanvas = document.getElementById('map-canvas');
+            
+            lidarCanvas.width = lidarCanvas.offsetWidth;
+            lidarCanvas.height = lidarCanvas.offsetHeight;
+            
+            mapCanvas.width = mapCanvas.offsetWidth;
+            mapCanvas.height = mapCanvas.offsetHeight;
+        });
+        
+        // Initial canvas setup
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 100);
+    </script>
+</body>
+</html>

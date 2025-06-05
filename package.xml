@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>auto-scout</name>
+  <version>1.0.0</version>
+  <description>Autonomous navigation system for Moorebot Scout robot with FHL-LD19 Lidar</description>
+
+  <maintainer email="user@example.com">Scout Team</maintainer>
+  <license>MIT</license>
+
+  <author email="user@example.com">Scout Team</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- Core ROS dependencies -->
+  <depend>rospy</depend>
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>actionlib_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Navigation stack -->
+  <depend>move_base</depend>
+  <depend>map_server</depend>
+  <depend>amcl</depend>
+  <depend>gmapping</depend>
+  <depend>dwa_local_planner</depend>
+  <depend>global_planner</depend>
+  <depend>costmap_2d</depend>
+
+  <!-- Visualization -->
+  <depend>rviz</depend>
+  <depend>robot_state_publisher</depend>
+
+  <!-- Image processing -->
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+
+  <export>
+    <!-- Other tools can request additional information be placed here -->
+  </export>
+</package>

@@ -1,0 +1,19 @@
+[Unit]
+Description=Moorebot Scout Web Interface
+After=network.target scout-navigation.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/auto-scout
+Environment=PYTHONPATH=/home/pi/auto-scout/src
+ExecStart=/usr/bin/python3 /home/pi/auto-scout/src/scout_web_interface.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
