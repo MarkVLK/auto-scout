@@ -1,225 +1,80 @@
 # Contributing to Auto-Scout
 
-Thank you for your interest in contributing to the Auto-Scout autonomous robot project! This document provides guidelines for contributing to the codebase.
+Auto-Scout is maintained around a companion-first ROS1 architecture. Contributions should reinforce that shape rather than reintroduce older assumptions about a full Noetic-era autonomy stack running directly on the Scout.
 
 ## Development Setup
 
-### Prerequisites
-- Ubuntu 20.04 LTS (recommended for ROS Noetic)
-- ROS Noetic installation
-- Python 3.8+
-- Git
+### Baseline assumptions
+- Any Unix-like machine with `python3` and `git` is enough for repo validation work.
+- The target companion runtime is still Ubuntu 18.04 + ROS Melodic.
+- Ubuntu 16.04 + ROS Kinetic is an acceptable fallback for older ROS1 environments.
+- Do not assume ROS Noetic or a Scout-only deployment path unless you are explicitly updating the documented architecture.
 
-### Setting Up Development Environment
-
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd auto-scout
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   # Install ROS dependencies
-   rosdep install --from-paths . --ignore-src -r -y
-   
-   # Install Python dependencies
-   pip install -r requirements.txt
-   ```
-
-3. **Build the package**:
-   ```bash
-   cd ~/catkin_ws
-   catkin_make
-   source devel/setup.bash
-   ```
-
-## Code Style Guidelines
-
-### Python Style
-- Follow [PEP 8](https://pep8.org/) style guidelines
-- Use descriptive variable and function names
-- Add docstrings to all classes and functions
-- Maximum line length: 100 characters
-- Use type hints where appropriate
-
-### ROS Conventions
-- Follow [ROS naming conventions](http://wiki.ros.org/ROS/Patterns/Conventions)
-- Use snake_case for node names and topic names
-- Use CamelCase for service and action names
-- Prefix custom messages/services with package name
-
-### Example Code Style:
-```python
-#!/usr/bin/env python3
-"""
-Module description here.
-"""
-
-import rospy
-from typing import Optional, Dict, List
-
-
-class ExampleClass:
-    """Class description."""
-    
-    def __init__(self, param: str):
-        """Initialize the class."""
-        self.param = param
-        rospy.loginfo(f"Initialized with param: {param}")
-    
-    def process_data(self, data: Dict[str, Any]) -> Optional[List[str]]:
-        """Process input data and return results."""
-        # Implementation here
-        pass
+### Local setup
+```bash
+git clone <repository-url>
+cd auto-scout
+python3 -m pip install -r requirements.txt
 ```
+
+If you want a catkin workspace for launch-file testing:
+
+```bash
+mkdir -p ~/catkin_ws/src
+ln -s "$(pwd)" ~/catkin_ws/src/auto-scout
+cd ~/catkin_ws
+catkin_make
+source devel/setup.bash
+```
+
+## Supported Interfaces
+
+These are the public entrypoints we actively support:
+
+- `python3 check_scout_compatibility.py --mode {repo|runtime|all}`
+- `./tools/deploy.sh <scout-ip> <user>`
+- `config/scout_config.yaml`
+
+Please avoid adding replacement wrappers, duplicate config templates, or one-off deployment helpers unless there is a clear long-term need.
 
 ## Testing
 
-### Running Tests
+Run the lightweight checks first:
+
 ```bash
-# Run all tests
-python -m pytest tests/
-
-# Run specific test file
-python -m pytest tests/test_scout_system.py
-
-# Run with coverage
-python -m pytest --cov=src tests/
+python3 check_scout_compatibility.py --mode repo
+python3 -m pytest tests/test_validation_cli.py
+python3 -m py_compile $(find src tests tools -name '*.py')
 ```
 
-### Writing Tests
-- Write unit tests for all new functions and classes
-- Use descriptive test names that explain what is being tested
-- Mock external dependencies (ROS topics, hardware interfaces)
-- Test both success and failure cases
+Notes:
 
-### Test Structure:
-```python
-import pytest
-from unittest.mock import Mock, patch
-from src.your_module import YourClass
+- `tests/test_validation_cli.py` is the canonical regression suite for the validator.
+- The repo does not currently maintain broad local unit coverage for ROS runtime behavior.
+- Hardware or ROS-graph verification should be treated as manual validation unless you are adding a durable automated test path.
 
+## Code Guidelines
 
-class TestYourClass:
-    """Test suite for YourClass."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.instance = YourClass()
-    
-    def test_method_success(self):
-        """Test successful operation."""
-        result = self.instance.method(valid_input)
-        assert result == expected_output
-    
-    def test_method_invalid_input(self):
-        """Test handling of invalid input."""
-        with pytest.raises(ValueError):
-            self.instance.method(invalid_input)
-```
-
-## Contribution Process
-
-### 1. Issue Creation
-- Check existing issues before creating new ones
-- Use issue templates when available
-- Provide clear description of the problem or feature request
-- Include relevant system information and error messages
-
-### 2. Branch Strategy
-- Create feature branches from `main`
-- Use descriptive branch names: `feature/dog-detection`, `bugfix/navigation-crash`
-- Keep branches focused on single features or fixes
-
-### 3. Pull Request Process
-1. **Before submitting**:
-   - Ensure all tests pass
-   - Update documentation if needed
-   - Add changelog entry for significant changes
-   - Rebase on latest main branch
-
-2. **Pull Request Requirements**:
-   - Clear title and description
-   - Reference related issues
-   - Include test coverage for new code
-   - Update relevant documentation
-
-3. **Review Process**:
-   - All PRs require at least one review
-   - Address review feedback promptly
-   - Maintain clean commit history
-
-### 4. Commit Guidelines
-- Use conventional commit format:
-  ```
-  type(scope): description
-  
-  feat(navigation): add dog search functionality
-  fix(camera): resolve image capture timeout
-  docs(readme): update installation instructions
-  test(detection): add unit tests for dog detection
-  ```
-
-## Architecture Guidelines
-
-### Module Organization
-- Keep modules focused on single responsibilities
-- Use dependency injection for hardware interfaces
-- Implement proper error handling and logging
-- Design for testability (avoid tight coupling)
-
-### ROS Best Practices
-- Use parameter server for configuration
-- Implement proper node lifecycle management
-- Handle node shutdown gracefully
-- Use appropriate message types for communication
-
-### Safety Considerations
-- Always implement emergency stop functionality
-- Validate sensor inputs before acting
-- Implement timeouts for all operations
-- Log safety-critical events
-
-## Hardware Testing
-
-### Simulation Testing
-- Test in ROS simulation environment first
-- Use mock hardware interfaces for unit testing
-- Validate navigation algorithms in Gazebo
-
-### Real Hardware Testing
-- Test incrementally (sensors → navigation → full system)
-- Always have manual override capability
-- Test in controlled environment first
-- Document hardware-specific configurations
+- Follow normal Python style and keep code readable without depending on framework magic.
+- Prefer small, explicit modules over broad convenience layers.
+- Keep configuration in `config/scout_config.yaml` rather than scattering parallel defaults across docs, scripts, and examples.
+- When adding ROS launch or runtime behavior, keep Scout-side work lightweight and put heavier autonomy assumptions on the companion side.
+- Remove dead code and outdated docs when they stop matching the supported architecture.
 
 ## Documentation
 
-### Code Documentation
-- Add docstrings to all public methods
-- Include parameter descriptions and return types
-- Document any hardware dependencies
-- Explain complex algorithms or state machines
+- Update `README.md` when the supported architecture or entrypoints change.
+- Keep operational details in `docs/`.
+- Do not add milestone reports or “complete” status writeups as permanent repo docs; git history is enough for that.
 
-### User Documentation
-- Update README for new features
-- Add configuration examples
-- Include troubleshooting information
-- Provide installation and setup instructions
+## Pull Requests
 
-## Getting Help
+- Keep each PR focused on one cleanup, behavior change, or validation improvement.
+- Include the exact commands you ran to verify the change.
+- Call out any remaining manual or hardware-dependent verification gaps.
+- Prefer updating existing docs and scripts over creating parallel alternatives.
 
-- **Questions**: Create a discussion or issue
-- **Bugs**: Use the bug report template
-- **Features**: Use the feature request template
-- **Chat**: Join our development chat (if available)
+## Help
 
-## Recognition
-
-Contributors will be recognized in:
-- CHANGELOG.md for significant contributions
-- README.md contributors section
-- Release notes for major features
-
-Thank you for helping make Auto-Scout better!
+- Open an issue for bugs or architecture mismatches.
+- Open a PR directly for straightforward cleanup or documentation fixes.

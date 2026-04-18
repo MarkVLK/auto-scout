@@ -1,76 +1,22 @@
-<!--
-  Complete system launch file for Moorebot Scout autonomous navigation.
-  This launches all components needed for full autonomous operation.
--->
+<?xml version="1.0"?>
 <launch>
-  <!-- Arguments -->
-  <arg name="use_rviz" default="true" />
-  <arg name="use_web_interface" default="true" />
-  <arg name="map_file" default="" />
-  <arg name="localization_mode" default="false" />
-  <arg name="simulation" default="false" />
+  <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
+  <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
+  <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml" />
+  <arg name="localization_mode" default="true" />
+  <arg name="run_local_scout_bridge" default="false" />
 
-  <!-- Load robot configuration -->
-  <rosparam file="$(find auto-scout)/config/scout_config.yaml" command="load" />
-  
-  <!-- Robot description -->
-  <param name="robot_description" textfile="$(find auto-scout)/urdf/scout.urdf" />
-  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" />
-  
-  <!-- Hardware drivers (only if not in simulation) -->
-  <group unless="$(arg simulation)">
-    <!-- Lidar driver -->
-    <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen">
-      <param name="port" value="/dev/ttyUSB0" />
-      <param name="baud_rate" value="230400" />
-      <param name="frame_id" value="laser" />
-    </node>
-    
-    <!-- Camera driver -->
-    <node name="scout_camera_driver" pkg="auto-scout" type="scout_camera_driver.py" output="screen">
-      <param name="camera_index" value="0" />
-      <param name="frame_id" value="camera_link" />
-      <param name="image_width" value="640" />
-      <param name="image_height" value="480" />
-    </node>
-    
-    <!-- Voice command interface -->
-    <node name="voice_command_interface" pkg="auto-scout" type="voice_command_interface.py" output="screen">
-      <param name="language" value="en-US" />
-      <param name="timeout" value="5.0" />
-    </node>
-  </group>
-  
-  <!-- Transform broadcaster for sensor frames -->
-  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_laser"
-        args="0.0 0.0 0.1 0 0 0 base_link laser" />
-  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_camera"
-        args="0.1 0.0 0.15 0 0 0 base_link camera_link" />
-  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_imu"
-        args="0.0 0.0 0.05 0 0 0 base_link imu_link" />
-  
-  <!-- SLAM or Localization -->
-  <group if="$(arg localization_mode)">
-    <!-- Localization with existing map -->
-    <include file="$(find auto-scout)/launch/navigation.launch">
-      <arg name="map_file" value="$(arg map_file)" />
+  <group if="$(arg run_local_scout_bridge)">
+    <include file="$(find auto-scout)/launch/scout_runtime.launch">
+      <arg name="config_file" value="$(arg config_file)" />
+      <arg name="site_file" value="$(arg site_file)" />
     </include>
   </group>
-  
-  <group unless="$(arg localization_mode)">
-    <!-- SLAM mapping -->
-    <include file="$(find auto-scout)/launch/slam_mapping.launch" />
-  </group>
-  
-  <!-- Navigation controller -->
-  <node name="scout_navigation_controller" pkg="auto-scout" type="scout_navigation_controller.py" output="screen" />
-  
-  <!-- Web interface (optional) -->
-  <node if="$(arg use_web_interface)" name="scout_web_interface" pkg="auto-scout" 
-        type="scout_web_interface.py" output="screen" />
-  
-  <!-- RViz visualization (optional) -->
-  <node if="$(arg use_rviz)" name="rviz" pkg="rviz" type="rviz" 
-        args="-d $(find auto-scout)/rviz/scout_navigation.rviz" />
 
+  <include file="$(find auto-scout)/launch/companion_runtime.launch">
+    <arg name="config_file" value="$(arg config_file)" />
+    <arg name="site_file" value="$(arg site_file)" />
+    <arg name="map_file" value="$(arg map_file)" />
+    <arg name="localization_mode" value="$(arg localization_mode)" />
+  </include>
 </launch>

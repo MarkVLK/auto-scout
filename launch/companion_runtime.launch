@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
+  <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
+  <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml" />
+  <arg name="localization_mode" default="true" />
+
+  <rosparam file="$(arg config_file)" command="load" />
+
+  <node name="companion_runtime_agent" pkg="auto-scout" type="companion_runtime_agent.py"
+        args="--site $(arg site_file)" output="screen" />
+
+  <group if="$(arg localization_mode)">
+    <include file="$(find auto-scout)/launch/navigation.launch">
+      <arg name="map_file" value="$(arg map_file)" />
+    </include>
+  </group>
+
+  <group unless="$(arg localization_mode)">
+    <include file="$(find auto-scout)/launch/slam_mapping.launch" />
+  </group>
+</launch>

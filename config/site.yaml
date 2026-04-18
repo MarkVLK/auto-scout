@@ -1,0 +1,67 @@
+project:
+  name: "auto-scout"
+  artifact_root: "artifacts/runs"
+
+roles:
+  scout:
+    hostname: "moorebot-scout"
+    workspace_dir: "/home/linaro/catkin_ws/src/auto-scout"
+    ssh:
+      host: "192.168.1.199"
+      user: "linaro"
+      port: 22
+    ros:
+      distro: "melodic"
+      master_uri: "http://localhost:11311"
+    devices:
+      camera: "/dev/video0"
+      lidar: "/dev/ttyUSB0"
+    topics:
+      camera_compressed: "/camera/image_raw/compressed"
+      lidar_scan: "/scan"
+      vendor_dog_detection: "/scout/dog_detection_external"
+    adapters:
+      motion: "rollereye_or_vendor_bridge"
+      camera: "opencv_device"
+      lidar: "ld19_serial"
+      dock: "vendor_dock"
+      dog_detection: "external_event"
+    capabilities:
+      camera: true
+      scan: true
+      pose: false
+      dock: false
+      notify: false
+      vendor_bridge: true
+    storage:
+      media_cache_dir: "/home/linaro/scout_media_cache"
+      map_cache_dir: "/home/linaro/scout_map_cache"
+
+  companion:
+    hostname: "pi5-companion"
+    workspace_dir: "/opt/auto-scout"
+    ssh:
+      host: "auto-scout-pi5.local"
+      user: "ubuntu"
+      port: 22
+    host_os:
+      name: "ubuntu"
+      version: "24.04"
+      arch: "arm64"
+    ros:
+      containerized: true
+      distro: "melodic"
+      container_name: "auto-scout-melodic"
+      compose_file: "container/docker-compose.yml"
+    capabilities:
+      camera: false
+      scan: true
+      pose: false
+      dock: false
+      notify: false
+    storage:
+      maps_dir: "/srv/auto-scout/maps"
+      media_dir: "/srv/auto-scout/media"
+      events_dir: "/srv/auto-scout/events"
+    notifications:
+      webhook_url: ""

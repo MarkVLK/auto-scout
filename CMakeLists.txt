@@ -10,9 +10,11 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   nav_msgs
   actionlib_msgs
+  actionlib
   tf2
   tf2_ros
   tf2_geometry_msgs
+  move_base_msgs
   move_base
   map_server
   amcl
@@ -22,6 +24,7 @@ find_package(catkin REQUIRED COMPONENTS
   costmap_2d
   rviz
   robot_state_publisher
+  joint_state_publisher
   cv_bridge
   image_transport
 )
@@ -39,9 +42,11 @@ catkin_package(
     sensor_msgs
     nav_msgs
     actionlib_msgs
+    actionlib
     tf2
     tf2_ros
     tf2_geometry_msgs
+    move_base_msgs
     move_base
     map_server
     amcl
@@ -51,6 +56,7 @@ catkin_package(
     costmap_2d
     rviz
     robot_state_publisher
+    joint_state_publisher
     cv_bridge
     image_transport
 )
@@ -63,14 +69,13 @@ include_directories(
 
 ## Mark executable scripts (Python etc.) for installation
 catkin_install_python(PROGRAMS
+  check_scout_compatibility.py
   src/scout_navigation_controller.py
+  src/scout_runtime_agent.py
+  src/companion_runtime_agent.py
   src/ld19_lidar_driver.py
   src/scout_camera_driver.py
-  src/voice_command_interface.py
-  src/scout_web_interface.py
-  scripts/calibrate_camera.py
-  scripts/diagnostics.py
-  tests/test_scout_system.py
+  src/dog_detection_module.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -100,8 +105,8 @@ install(DIRECTORY
 )
 
 install(DIRECTORY
-  templates/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/templates
+  docs/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/docs
   PATTERN ".svn" EXCLUDE
 )
 
@@ -111,11 +116,27 @@ install(DIRECTORY
   PATTERN ".svn" EXCLUDE
 )
 
+install(DIRECTORY
+  container/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/container
+  PATTERN ".svn" EXCLUDE
+)
+
+install(DIRECTORY
+  scripts/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts
+  PATTERN ".svn" EXCLUDE
+)
+
+install(FILES
+  auto-scout
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 ## Mark files for installation
 install(FILES
   README.md
-  setup_guide.md
-  install.sh
+  docs/setup_guide.md
   package.xml
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

@@ -122,3 +122,7 @@ recordings/
 *.avi
 !examples/**/*.jpg
 !examples/**/*.png
+
+# Auto-Scout CLI artifacts
+artifacts/
+validation-report.json

@@ -1,3 +1,36 @@
+# Auto-Scout runtime configuration
+#
+# This file now models the verified companion-first architecture:
+# - Scout stays lightweight and handles motion, capture, and sensor bridging
+# - Companion handles SLAM, navigation, storage, and reporting
+
+platform:
+  runtime_profile: "scout_with_companion"
+  scout_control_api: "rollereye_or_vendor_bridge"
+  recommended_companion_ros: "melodic"
+  fallback_companion_ros: "kinetic"
+  run_navigation_on_companion: true
+  run_heavy_ml_on_companion: true
+
+storage:
+  # Official Moorebot sources disagree on raw flash size and the FAQ says only
+  # roughly 2 to 3 GB is user-accessible, so treat Scout storage as temporary.
+  scout_media_cache_dir: "/home/linaro/scout_media_cache"
+  scout_map_cache_dir: "/home/linaro/scout_map_cache"
+  primary_store: "companion"
+  companion_map_dir: "/srv/auto-scout/maps"
+  companion_media_dir: "/srv/auto-scout/media"
+  companion_event_dir: "/srv/auto-scout/events"
+  webhook_url: ""
+
+topics:
+  lidar_scan: "/scan"
+  camera_compressed: "/camera/image_raw/compressed"
+  scout_video_stream: "/CoreNode/h264"
+  scout_imu: "/SensorNode/imu"
+  scout_tof: "/SensorNode/tof"
+  external_dog_detection: "/scout/dog_detection_external"
+
 waypoints:
   home:
     x: 0.0
@@ -19,6 +52,21 @@ waypoints:
     y: 2.0
     z: 0.0
     w: 1.0
+  office:
+    x: -3.0
+    y: -1.0
+    z: 0.0
+    w: 1.0
+  bathroom:
+    x: 1.0
+    y: 3.0
+    z: 0.0
+    w: 1.0
+  hallway:
+    x: 0.0
+    y: 1.0
+    z: 0.0
+    w: 1.0
   charging_station:
     x: 0.0
     y: 0.0
@@ -28,12 +76,12 @@ waypoints:
 schedules:
   - name: morning_patrol
     time: "08:00"
-    waypoints: [kitchen, living_room, bedroom, home]
-    active: true
+    waypoints: [kitchen, living_room, hallway, home]
+    active: false
   - name: evening_patrol
     time: "20:00"
-    waypoints: [living_room, kitchen, bedroom, home]
-    active: true
+    waypoints: [living_room, bedroom, office, home]
+    active: false
 
 safety:
   min_battery_level: 20.0
@@ -54,14 +102,22 @@ camera:
   device: "/dev/video0"
   width: 640
   height: 480
-  fps: 30
+  fps: 15
   frame_id: "camera_link"
 
+web:
+  port: 8080
+
 navigation:
-  max_vel_x: 0.3
+  execution_host: "companion"
+  slam_package: "gmapping"
+  localization_package: "amcl"
+  planner_package: "move_base"
+  exploration_package: "explore_lite"
+  max_vel_x: 0.25
   max_vel_theta: 0.8
-  xy_goal_tolerance: 0.1
-  yaw_goal_tolerance: 0.1
+  xy_goal_tolerance: 0.15
+  yaw_goal_tolerance: 0.15
   planner_frequency: 1.0
   controller_frequency: 10.0
 
@@ -71,3 +127,22 @@ mapping:
   particles: 80
   linear_update: 0.1
   angular_update: 0.0436
+  save_directory: "/srv/auto-scout/maps"
+
+dog_search:
+  max_search_time: 600
+  room_search_time: 30
+  detection_backend: "companion_detector"
+  external_detection_topic: "/scout/dog_detection_external"
+  preferred_backend_order:
+    - "builtin_scout_ai"
+    - "companion_detector"
+  search_order:
+    - living_room
+    - kitchen
+    - bedroom
+    - office
+    - bathroom
+    - hallway
+  capture_short_video: true
+  result_storage: "companion"

@@ -1,0 +1,29 @@
+services:
+  companion-runtime:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+    container_name: auto-scout-melodic
+    network_mode: host
+    privileged: true
+    working_dir: /opt/catkin_ws/src/auto-scout
+    volumes:
+      - ..:/opt/catkin_ws/src/auto-scout
+      - /srv/auto-scout:/srv/auto-scout
+      - /dev:/dev
+    environment:
+      AUTO_SCOUT_CONFIG: /opt/catkin_ws/src/auto-scout/config/scout_config.yaml
+      AUTO_SCOUT_SITE_CONFIG: /opt/catkin_ws/src/auto-scout/config/site.yaml
+      ROS_MASTER_URI: http://localhost:11311
+      ROS_HOSTNAME: localhost
+    command:
+      - /bin/bash
+      - -lc
+      - >
+        source /opt/ros/melodic/setup.bash &&
+        cd /opt/catkin_ws &&
+        catkin_make &&
+        roslaunch auto-scout companion_runtime.launch
+        config_file:=/opt/catkin_ws/src/auto-scout/config/scout_config.yaml
+        site_file:=/opt/catkin_ws/src/auto-scout/config/site.yaml
+        localization_mode:=true

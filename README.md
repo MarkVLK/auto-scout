@@ -1,320 +1,202 @@
-# Auto-Scout: Autonomous Navigation System
+# Auto-Scout
 
-[![Project Status](https://img.shields.io/badge/Status-Ready%20for%20Development-brightgreen)](https://github.com/your-repo/auto-scout)
-[![Python](https://img.shields.io/badge/Python-3.7%2B-blue)](https://python.org)
-[![ROS](https://img.shields.io/badge/ROS-Noetic-blue)](https://wiki.ros.org/noetic)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+Auto-Scout is a companion-first autonomy project for a Moorebot Scout with an added LD19-class 2D LiDAR. The repository is now documented and structured around what the Scout platform appears to support in practice, not around the earlier assumption that the robot could run a full modern ROS autonomy stack, web UI, voice stack, and ML inference locally.
 
-Transform your Moorebot Scout into a fully autonomous robot capable of mapping your house and navigating according to schedules or voice commands using the youyeetoo FHL-LD19 Lidar sensor.
+The clean-slate reset in this repo now treats the runnable system as two explicit roles:
 
-## Features
+- `scout-runtime`: a thin runtime on the rooted Scout for motion, sensor bridging, and health
+- `companion-runtime`: the main Raspberry Pi 5 runtime for ROS navigation, storage, validation, and missions
 
-- 🗺️ **SLAM Mapping**: Create detailed maps of your house using Lidar and camera data
-- 🤖 **Autonomous Navigation**: Navigate through pre-defined waypoints with obstacle avoidance
-- 📅 **Scheduled Patrols**: Set up automatic patrol routes on a schedule
-- 🗣️ **Voice Commands**: Control the robot with voice commands
-- 🐕 **Dog Finding**: Search the house room-by-room to find your dog, take photos, and report location
-- 📱 **ROS Integration**: Full ROS-based architecture for extensibility
-- 🔋 **Safety Features**: Emergency stop, low battery handling, obstacle detection
-- 📊 **Visual Odometry**: Enhanced localization using camera and IMU fusion
+## Reality Check
 
-## Hardware Requirements
+As of April 2, 2026, the most relevant public sources say:
 
-- Moorebot Scout robot
-- youyeetoo FHL-LD19 Lidar sensor
-- USB-to-TTL converter for Lidar connection
-- MicroSD card (32GB+ recommended)
-- Optional: External battery pack for extended operation
+- Moorebot's product page lists a quad-core ARM A7 @ 1.2 GHz, 512 MB RAM, Linux + "ROS 1.4", IMU, ToF, 1080p camera, and mecanum wheels.
+- The Moorebot Scout User Manual V4.0 lists 4 GB eMMC and describes patrol creation as manually driving a path from the dock and saving it.
+- Moorebot's FAQ says the onboard flash is 8 GB, user-accessible storage is only about 2 to 3 GB, and there is no SD card slot.
+- Moorebot's official open-source repo recommends an Ubuntu 18.04 build environment and exposes a custom `rollereye` Python API plus topics such as `/CoreNode/h264`, `/SensorNode/imu`, and `/SensorNode/tof`.
+- ROS REP-3 maps ROS 1 distros to host platforms as follows: Kinetic -> Ubuntu 16.04 / Python 2.7, Melodic -> Ubuntu 18.04 / Python 2.7, Noetic -> Ubuntu 20.04 / Python 3.8.
 
-## Quick Start
+That combination means:
 
-1. **Hardware Setup**: Connect the FHL-LD19 Lidar to your Scout via USB
-2. **Software Installation**: Run the automated installation script
-3. **Initial Mapping**: Create a map of your environment
-4. **Configure Waypoints**: Set up navigation points for your house
-5. **Schedule Patrols**: Configure autonomous patrol schedules
+- Do not assume ROS Noetic is available on the Scout itself.
+- Do not assume the Scout can comfortably run `slam_gmapping`, `move_base`, Flask, speech recognition, and PyTorch at the same time.
+- Do not assume local storage is large or consistent enough to be the only place maps and patrol media live.
+- Do assume a rooted Scout can still be a useful sensor and motion endpoint if a companion computer handles mapping, planning, storage, and notifications.
 
-## Installation
+Detailed notes and source links live in [docs/VERIFIED_ARCHITECTURE.md](/Users/markvlcek/Code/auto-scout/docs/VERIFIED_ARCHITECTURE.md).
 
-### Automated Installation (Recommended)
+## Recommended Architecture
 
-SSH into your Moorebot Scout and run:
+Use two execution tiers:
 
-```bash
-# Download and run the installation script
-wget https://raw.githubusercontent.com/your-repo/auto-scout/main/install.sh
-chmod +x install.sh
-./install.sh
-```
+1. Scout-side runtime
 
-### Manual Installation
+- Keep this lightweight.
+- Publish or bridge camera, IMU, ToF, and LD19 scan data.
+- Execute motion primitives and media capture.
+- Prefer the Scout's existing vision stack or a thin bridge over heavyweight onboard ML.
 
-See [setup_guide.md](docs/setup_guide.md) for detailed manual installation instructions.
+2. Companion runtime
 
-## Usage
+- Run on Ubuntu 18.04 + ROS Melodic if you can choose the host.
+- Fall back to Ubuntu 16.04 + ROS Kinetic only if you must match an older ROS1 environment.
+- Run `slam_gmapping`, `map_server`, `amcl`, `move_base`, and optional `explore_lite`.
+- Store maps and patrol media here first, then forward to NAS, cloud, or messaging integrations.
 
-### Starting the System
+This is the only architecture in this repo that currently lines up with the public Scout hardware constraints.
 
-```bash
-cd /home/linaro/scout_navigation
-./start_navigation.sh
-```
+## Runtime Layout
 
-### Voice Commands
+The supported v1 runtime surface is intentionally headless:
 
-- "Start patrol" - Begin autonomous patrol
-- "Stop patrol" - End patrol and stop
-- "Go home" - Return to home position
-- "Go kitchen" - Navigate to kitchen
-- "Go living room" - Navigate to living room
-- "Go bedroom" - Navigate to bedroom
-- "Find dog" - Search the house room-by-room for your dog
-- "Stop dog search" - Cancel active dog search
-- "Emergency stop" - Immediate stop
-- "Save map" - Save current SLAM map
+- `auto-scout`
+  the main CLI for deploy, validate, and mission runs
+- [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml)
+  single inventory for Scout and Raspberry Pi 5 hosts, devices, storage, and declared capabilities
+  keep `pose`, `dock`, and `notify` disabled there until you have verified them on real hardware
+- [config/missions/smoke_loop.yaml](/Users/markvlcek/Code/auto-scout/config/missions/smoke_loop.yaml)
+  canonical proof mission for a real room loop, return, photo capture, and notification
+- `launch/scout_runtime.launch`
+  Scout-side launch for the thin bridge runtime
+- `launch/companion_runtime.launch`
+  companion-side launch for localization or SLAM plus the companion runtime heartbeat
 
-### ROS Commands
+Legacy browser and voice surfaces are quarantined under [legacy/README.md](/Users/markvlcek/Code/auto-scout/legacy/README.md). They are not part of the supported deployment path anymore.
 
-```bash
-# Manual movement
-rostopic pub /cmd_vel geometry_msgs/Twist "linear: {x: 0.2}" 
+## Mission Goals
 
-# Navigate to waypoint
-rostopic pub /scout/command std_msgs/String "go_kitchen"
+### 1. Autonomous House Mapping
 
-# Start dog search
-rostopic pub /scout/command std_msgs/String "find_dog"
+Feasible path:
 
-# Stop dog search
-rostopic pub /scout/command std_msgs/String "stop_dog_search"
+- Mount and calibrate the LD19 so it has a clean 2D field of view.
+- Bridge scan data and a usable pose estimate into a companion ROS1 host.
+- Run `slam_gmapping` on the companion.
+- Use `map_server` to save maps to companion storage.
+- Mirror saved maps to cloud or NAS if desired.
 
-# Emergency stop
-rostopic pub /scout/emergency_stop std_msgs/Bool true
+Important caveat:
 
-# Check robot status
-rostopic echo /scout/status
-```
+- `gmapping` needs an odometry or pose source. Moorebot's public docs describe monocular SLAM and VIO, but they do not clearly document a public `/odom` interface. In this repo we treat that as an integration risk that must be solved with a Scout bridge, companion-side odometry, or another exposed pose source.
 
-### Dog Search Feature
+### 2. Room Patrol With Saved Maps
 
-The robot can autonomously search your house to find your dog:
+Feasible path:
 
-1. **Voice Command**: Say "Find dog" to start the search
-2. **Systematic Search**: The robot will visit each room in a predefined order
-3. **Computer Vision**: Uses the camera to detect and identify dogs
-4. **Photo Capture**: Takes a photo when a dog is found
-5. **Location Reporting**: Reports which room the dog was found in
-6. **Return Home**: Automatically returns to the charging dock when complete
+- Save one occupancy grid per floor or operating area.
+- Define named room goals and a room-to-waypoint graph in YAML.
+- Run `amcl` + `move_base` on the companion.
+- Capture stills or short clips at each patrol goal.
+- Persist media to the companion first, then optionally fan out to webhooks or cloud storage.
 
-The search covers these rooms in order:
-- Living room
-- Kitchen  
-- Bedroom
-- Office
-- Bathroom
-- Hallway
+### 3. Dog Search
 
-Search parameters can be configured in the robot's settings:
-- Maximum search time: 10 minutes
-- Time per room: 30 seconds
-- Photo upload destination
-- Room search order
+Feasible path:
 
-## Configuration
+- Reuse the saved map and room graph.
+- Search room by room with a bounded timeout.
+- Prefer one of these detection paths:
+  - a bridge into the Scout's built-in dog recognition if accessible
+  - offboard inference on the companion
+- When a dog is found, save a photo or short clip plus room metadata, then send or sync it from the companion.
 
-The robot can be configured by editing the configuration file:
+Not recommended:
 
-```bash
-# Main configuration file
-config/scout_config.yaml
+- PyTorch or other heavyweight local inference on the Scout's 512 MB platform.
 
-# Example configuration with all options
-examples/configs/scout_config_example.yaml
-```
+## What Changed In This Repo
 
-### Key Configuration Sections
+The repository now assumes:
 
-- **Navigation**: Speed limits, goal tolerance, obstacle avoidance
-- **Dog Search**: Search timing, room order, detection confidence
-- **House Layout**: Room coordinates and waypoints  
-- **Voice Commands**: Custom command mappings
-- **Safety**: Emergency stops, battery thresholds
-- **Logging**: Log levels and file locations
+- companion-first navigation and storage
+- Scout-side code should be thin and compatibility-focused
+- dog detection should prefer external or built-in Scout signals over local Torch inference
+- docs must distinguish verified facts from inference
 
-See `examples/configs/scout_config_example.yaml` for detailed configuration options.
+The repository no longer claims that the stock Scout is a drop-in ROS Noetic robot with enough local resources for a full autonomy stack.
 
-## Project Structure
+Deployment support is intentionally narrow and now routes through the headless CLI. `tools/deploy.sh` remains as a compatibility wrapper around `./auto-scout deploy scout`.
 
-```
-auto-scout/
-├── src/                    # Python source modules
-├── launch/                 # ROS launch files
-├── config/                 # Configuration files
-├── tests/                  # Test suite
-├── docs/                   # Documentation
-├── examples/               # Example configs and demos
-├── tools/                  # Development and deployment tools
-├── scripts/                # Utility scripts
-├── systemd/                # System service files
-├── templates/              # Web interface templates
-├── urdf/                   # Robot description files
-└── rviz/                   # Visualization configurations
-```
+## Key Files
 
-## Development
+- [docs/VERIFIED_ARCHITECTURE.md](/Users/markvlcek/Code/auto-scout/docs/VERIFIED_ARCHITECTURE.md): verified facts, compatibility matrix, and system design
+- [docs/setup_guide.md](/Users/markvlcek/Code/auto-scout/docs/setup_guide.md): step-by-step setup for Scout plus companion
+- [docs/QUICKSTART.md](/Users/markvlcek/Code/auto-scout/docs/QUICKSTART.md): short path to first mapping and patrol tests
+- [config/scout_config.yaml](/Users/markvlcek/Code/auto-scout/config/scout_config.yaml): runtime profile, storage policy, and mission settings
+- [check_scout_compatibility.py](/Users/markvlcek/Code/auto-scout/check_scout_compatibility.py): canonical validator for repo assumptions, runtime readiness, and mission prerequisites
+- [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml): reset-era inventory for Scout and companion roles
+- [config/missions/smoke_loop.yaml](/Users/markvlcek/Code/auto-scout/config/missions/smoke_loop.yaml): real-world smoke mission contract
+- [auto-scout](/Users/markvlcek/Code/auto-scout/auto-scout): headless deploy, validate, and mission CLI
+- [tools/deploy.sh](/Users/markvlcek/Code/auto-scout/tools/deploy.sh): supported Scout deployment entrypoint
+- [docs/VALIDATION.md](/Users/markvlcek/Code/auto-scout/docs/VALIDATION.md): how to run the validator and why older check scripts were retired
 
-### Setting Up Development Environment
+## Suggested Phased Plan
+
+### Phase 1
+
+- Verify root access and topic or API access on the Scout.
+- Bring up the LD19 and camera bridge.
+- Confirm you can command motion safely.
+
+### Phase 2
+
+- Stand up a companion computer on the same network.
+- Feed scan plus pose into `slam_gmapping`.
+- Save and reload a map from companion storage.
+
+### Phase 3
+
+- Add named room goals and patrol sequences.
+- Capture media per room and store it on the companion.
+- Add webhook delivery for notifications.
+
+### Phase 4
+
+- Integrate dog detection through either the built-in Scout AI or offboard inference.
+- Return room name, timestamp, and media URL/path in the mission result.
+
+## Commands
+
+Use the headless CLI for supported deployment, validation, and smoke-mission workflows:
 
 ```bash
-# Run the development setup script
-./tools/setup_dev.sh
+# Deploy the thin Scout runtime
+./auto-scout deploy scout
 
-# Or manually set up
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Deploy the containerized companion runtime
+./auto-scout deploy companion
+
+# Validate the rooted Scout, the Raspberry Pi 5 companion, or the full system contract
+./auto-scout validate scout
+./auto-scout validate companion
+./auto-scout validate system
+
+# Run the canonical real-world proof mission
+./auto-scout run smoke-loop
 ```
 
-### Running Tests
+These lower-level ROS launch commands are still relevant once the companion stack is up:
 
 ```bash
-# Run all tests
-python -m pytest tests/
-
-# Run specific test
-python -m pytest tests/test_dog_search_integration.py
-
-# Run with coverage
-python -m pytest --cov=src tests/
+roslaunch auto-scout slam_mapping.launch
+rosrun map_server map_saver -f /srv/auto-scout/maps/house_map
+roslaunch auto-scout navigation.launch map_file:=/srv/auto-scout/maps/house_map.yaml
 ```
 
-### Development Commands
+## Current Status
 
-```bash
-scout-build    # Build ROS workspace
-scout-test     # Run test suite  
-scout-lint     # Check code style
-scout-run      # Launch complete system
-scout-logs     # View system logs
-```
+This repo is best treated as:
 
-## Deployment
+- a corrected design and integration plan
+- a starting point for Scout bridge code and companion-side ROS1 navigation
+- a clean-slate headless runtime scaffold centered on `scout-runtime`, `companion-runtime`, `config/site.yaml`, and `config/missions/smoke_loop.yaml`
+- not a finished end-to-end autonomy product
 
-Deploy to your robot using the deployment script:
+## External References
 
-```bash
-# Deploy to robot (replace IP and username)
-./tools/deploy.sh 192.168.1.100 ubuntu
-
-# Script will:
-# - Copy files to robot
-# - Install dependencies  
-# - Build ROS workspace
-# - Start services
-```
-
-## System Architecture
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Moorebot Scout │    │   FHL-LD19       │    │  Host Computer  │
-│  - Camera       │<-->│   Lidar Sensor   │<-->│  - ROS Master   │
-│  - IMU          │    │   - 360° scan    │    │  - SLAM         │
-│  - Motors       │    │   - 12m range    │    │  - Path Plan    │
-│  - WiFi         │    │   - 8000Hz       │    │  - Scheduling   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
-
-## Safety Features
-
-- **Emergency Stop**: Multiple ways to immediately stop the robot
-- **Obstacle Avoidance**: Real-time obstacle detection and avoidance
-- **Battery Monitoring**: Automatic return to charging station when low
-- **Network Monitoring**: Handles WiFi disconnections gracefully
-- **Mechanical Limits**: Accounts for Scout's wheel slippage and inaccuracies
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Lidar not detected**
-   ```bash
-   ls -la /dev/ttyUSB*
-   sudo chmod 666 /dev/ttyUSB0
-   ```
-
-2. **Poor navigation accuracy**
-   - Calibrate wheel odometry
-   - Adjust SLAM parameters
-   - Ensure good lighting for visual odometry
-
-3. **Voice commands not working**
-   - Check microphone permissions
-   - Verify internet connection for speech recognition
-   - Test with manual commands first
-
-### Debug Commands
-
-```bash
-# Check ROS topics
-rostopic list
-
-# Monitor Lidar data
-rostopic echo /scan
-
-# View camera feed
-rosrun image_view image_view image:=/camera/image_raw
-
-# Check transforms
-rosrun tf tf_monitor
-```
-
-## Development
-
-### Project Structure
-
-```
-auto-scout/
-├── config/          # Configuration files
-├── launch/          # ROS launch files
-├── src/             # Python source code
-├── urdf/            # Robot description files
-├── install.sh       # Installation script
-├── docs/            # Documentation
-└── tests/           # Test files
-```
-
-### Adding New Features
-
-1. Create new ROS nodes in `src/`
-2. Add launch configurations in `launch/`
-3. Update configuration in `config/scout_config.yaml`
-4. Test thoroughly before deployment
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Test on actual hardware
-4. Submit a pull request
-
-## License
-
-This project is open source. See LICENSE file for details.
-
-## Acknowledgments
-
-- [Moorebot](https://www.moorebot.com/) for creating an accessible Linux-based robot
-- [youyeetoo](https://www.youyeetoo.com/) for the FHL-LD19 Lidar sensor
-- [ROS Community](https://www.ros.org/) for the robotics framework
-- Nicole Faerber's [blog post](https://www.dpin.de/nf/moorebot-scout-as-linux-as-it-can-get/) for Scout insights
-
-## Support
-
-- Create an issue for bugs or feature requests
-- Check the [setup guide](docs/setup_guide.md) for detailed instructions
-- Join the community discussions
-
----
-
-**Note**: This system enhances the Scout's capabilities but cannot completely overcome its mechanical limitations (wheel slippage, gear backlash). For best results, use in well-lit environments with good visual landmarks.
+- [Moorebot Scout product page](https://www.moorebot.com/en-ca/products/moorebot-scout)
+- [Moorebot Scout FAQ](https://www.moorebot.com/en-ca/pages/faq-for-moorebot-scout-2)
+- [Moorebot Scout User Manual V4.0](https://cdn.shopifycdn.net/s/files/1/0016/4616/6103/files/Scout_User_Manual_V4.0.pdf?v=1657247441)
+- [Pilot-Labs-Dev/Scout-open-source](https://github.com/Pilot-Labs-Dev/Scout-open-source)
+- [ROS REP-3 target platforms](https://www.ros.org/reps/rep-0003.html)

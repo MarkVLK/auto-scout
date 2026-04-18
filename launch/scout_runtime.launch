@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
+  <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
+
+  <rosparam file="$(arg config_file)" command="load" />
+
+  <node name="scout_runtime_agent" pkg="auto-scout" type="scout_runtime_agent.py"
+        args="--site $(arg site_file)" output="screen" />
+
+  <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen">
+    <param name="config_file" value="$(arg config_file)" />
+  </node>
+
+  <node name="scout_camera_driver" pkg="auto-scout" type="scout_camera_driver.py"
+        args="--config $(arg config_file)" output="screen" />
+</launch>

@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Repo-local entry point for the clean-slate Auto-Scout CLI."""
+
+import os
+import sys
+
+
+REPO_ROOT = os.path.abspath(os.path.dirname(__file__))
+SRC_DIR = os.path.join(REPO_ROOT, "src")
+
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from auto_scout.cli import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

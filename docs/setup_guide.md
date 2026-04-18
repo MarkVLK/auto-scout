@@ -1,215 +1,170 @@
-# Moorebot Scout Autonomous Navigation Setup Guide
+# Moorebot Scout + LD19 Setup Guide
 
-This guide will help you set up the Moorebot Scout with the youyeetoo FHL-LD19 Lidar sensor for autonomous navigation and SLAM mapping.
+This guide assumes a Moorebot Scout with an added LD19-class 2D LiDAR and a companion computer on the same network. It intentionally does not assume that the Scout can run a full modern ROS autonomy stack by itself.
 
-## Hardware Requirements
+## 1. Verified Constraints
 
-- Moorebot Scout robot
-- youyeetoo FHL-LD19 Lidar sensor
-- USB to TTL converter (for Lidar communication)
-- MicroSD card (32GB+ recommended for data logging)
-- External battery pack (optional, for extended operation)
+Before you start, treat these as design constraints:
 
-## System Architecture Overview
+- The public Moorebot product page lists a quad-core ARM A7 @ 1.2 GHz and 512 MB RAM.
+- Official Moorebot materials disagree on flash size: 4 GB in the V4.0 manual, 8 GB in the FAQ, and 16 GB on the current product page.
+- The Moorebot FAQ says only about 2 to 3 GB is user-accessible and there is no SD card slot.
+- The official Moorebot open-source repo recommends compiling in Ubuntu 18.04 and exposes a custom `rollereye` API plus a few ROS topics.
+- ROS Noetic targets Ubuntu 20.04 and Python 3.8, which does not line up with the public Scout environment.
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  Moorebot Scout │    │   FHL-LD19       │    │  Host Computer  │
-│  - Camera       │<-->│   Lidar Sensor   │<-->│  - ROS Master   │
-│  - IMU          │    │   - 360° scan    │    │  - SLAM         │
-│  - Motors       │    │   - 12m range    │    │  - Path Plan    │
-│  - WiFi         │    │   - 8000Hz       │    │  - Scheduling   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
+Because of that, this project uses the Scout as a lightweight robot endpoint and moves SLAM, navigation, storage, and notifications to a companion system.
 
-## Phase 1: Scout Setup and Access
+The clean-slate runtime split in this repo is:
 
-### 1.1 Initial Scout Configuration
+- `scout-runtime` on the rooted Scout
+- `companion-runtime` on the Raspberry Pi 5
+- `auto-scout` as the headless operator CLI
+- `config/site.yaml` as the single inventory for both hosts
 
-1. Power on the Scout and connect to its WiFi network
-2. Complete initial setup using the Moorebot app
-3. Find the Scout's IP address (usually starts with 192.168.1.x)
-4. SSH into the Scout:
+## 2. Hardware Layout
 
-```bash
-ssh linaro@<scout-ip-address>
-# Default password: linaro
-```
+Recommended layout:
 
-### 1.2 Enable Root Access
+- Scout for locomotion, camera, IMU, ToF, and optional built-in AI
+- LD19 mounted high enough to clear the Scout shell and camera mast
+- USB-to-TTL adapter or direct serial wiring for the LD19
+- Companion computer on the same Wi-Fi network
 
-Once logged in, edit the RC file to enable sudo:
+Recommended companion targets:
 
-```bash
-sudo nano /etc/rc.local
-```
+- Preferred host: Ubuntu Server 24.04 LTS arm64 on the Raspberry Pi 5
+- Preferred ROS userspace: Ubuntu 18.04 + ROS Melodic inside the companion container
+- Acceptable fallback: Ubuntu 16.04 + ROS Kinetic
+- Not recommended for this repo's current assumptions: trying to force everything onto the Scout itself
 
-Add this line before `exit 0`:
-```bash
-chmod 4755 /usr/bin/sudo
-```
+## 3. Scout-Side Access
 
-Reboot the Scout:
-```bash
-sudo reboot
-```
+The public Moorebot open-source repo documents a root-enablement path through the mobile app. If you use that route, do it carefully and expect vendor firmware behavior to vary by release.
 
-After reboot, you can get root access:
-```bash
-sudo su -
-```
+What you need from the Scout side:
 
-## Phase 2: System Updates and Dependencies
+- motion control access
+- camera access or video stream access
+- IMU and ToF access if available
+- a reliable way to start and stop media capture
 
-### 2.1 Update the System
+If the public `rollereye` Python API is available, treat it as the primary Scout control API until you prove a more standard ROS interface exists on your unit.
 
-```bash
-# Update package lists
-sudo apt update
+## 4. LD19 Bring-Up
 
-# Install essential packages
-sudo apt install -y \
-    python3-pip \
-    python3-dev \
-    build-essential \
-    git \
-    cmake \
-    pkg-config \
-    libjpeg-dev \
-    libpng-dev \
-    libtiff-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev \
-    libv4l-dev \
-    libxvidcore-dev \
-    libx264-dev \
-    libgtk-3-dev \
-    libatlas-base-dev \
-    gfortran \
-    python3-numpy
-```
+For the LD19:
 
-### 2.2 Install ROS Dependencies
+- wire power and serial safely
+- verify the serial device path on the host that reads the sensor
+- publish `/scan`
+- confirm a stable frame id and transform to `base_link`
 
-```bash
-# Install additional ROS packages
-sudo apt install -y \
-    ros-kinetic-navigation \
-    ros-kinetic-slam-gmapping \
-    ros-kinetic-move-base \
-    ros-kinetic-amcl \
-    ros-kinetic-map-server \
-    ros-kinetic-robot-localization
-```
+You can publish scan data either:
 
-## Phase 3: Lidar Integration
+- directly on the Scout, if serial access is reliable and CPU impact is low
+- on the companion, if the LiDAR is physically attached there instead
 
-### 3.1 Hardware Connection
+The repo's launch files now assume that a scan publisher exists and avoid depending on a missing `lidar.launch`.
 
-1. Connect the FHL-LD19 Lidar to the Scout via USB-to-TTL converter
-2. The Lidar typically uses:
-   - Red wire: VCC (5V)
-   - Black wire: GND
-   - White wire: TX
-   - Green wire: RX
+## 5. Companion ROS1 Stack
 
-### 3.2 Lidar Driver Installation
+Install a ROS1 navigation stack on the companion host.
 
-Create the Lidar driver package:
+The supported repo path is now to deploy the companion stack through the container files in `container/` and manage it via `./auto-scout deploy companion`.
 
-```bash
-cd /home/linaro
-mkdir -p catkin_ws/src
-cd catkin_ws/src
-git clone https://github.com/ldrobotSensorTeam/ldlidar_ros.git
-cd ..
-catkin_make
-source devel/setup.bash
-```
+Recommended package set:
 
-## Phase 4: SLAM Configuration
+- `slam_gmapping`
+- `map_server`
+- `amcl`
+- `move_base`
+- `dwa_local_planner`
+- `global_planner`
+- `explore_lite` for autonomous exploration
 
-### 4.1 Create SLAM Launch File
+Why this stack:
 
-Create a launch file for SLAM mapping:
+- it matches Kinetic and Melodic era tooling
+- it is lighter than more modern alternatives
+- it is realistic for a Scout-plus-companion architecture
 
-```bash
-mkdir -p /home/linaro/catkin_ws/src/scout_navigation/launch
-```
+## 6. Pose / Odometry Requirement
 
-### 4.2 Navigation Stack Setup
+This is the main integration risk.
 
-The navigation stack will combine:
-- Lidar data for obstacle detection and mapping
-- Camera data for visual landmarks
-- IMU data for orientation
-- Odometry from wheel encoders (with corrections)
+`slam_gmapping` and `move_base` need a usable pose estimate. Moorebot's public docs mention monocular SLAM and VIO, but they do not clearly document a stable public `/odom` contract for rooted users.
 
-## Phase 5: Computer Vision Integration
+You need one of:
 
-### 5.1 Camera Calibration
+- a Scout bridge that exposes pose or odometry from the existing firmware
+- a companion-side pose estimate fused from LiDAR, camera, and IMU
+- another tested localization source you trust
 
-The Scout's camera needs calibration for accurate visual odometry and landmark detection.
+Do not start full-house autonomous mapping until this piece is solved.
 
-### 5.2 Visual-Inertial Odometry
+## 7. Storage Policy
 
-Combine camera and IMU data to improve localization accuracy, compensating for the Scout's mechanical imprecision.
+Use a conservative storage plan:
 
-## Phase 6: Scheduling and Autonomous Operation
+- store temporary captures locally on the Scout only when needed
+- treat companion storage as the primary store for maps and media
+- optionally mirror the companion store to NAS, S3-compatible object storage, or messaging/webhook pipelines
 
-### 6.1 Mission Planning
+Suggested directories on the companion:
 
-Create a mission planner that can:
-- Execute scheduled patrols
-- Respond to voice commands
-- Handle emergency stops
-- Return to charging station
+- `/srv/auto-scout/maps`
+- `/srv/auto-scout/media`
+- `/srv/auto-scout/events`
 
-### 6.2 Safety Systems
+## 8. Mapping Workflow
 
-Implement multiple layers of safety:
-- Emergency stop via WiFi command
-- Obstacle avoidance using all sensors
-- Battery monitoring and auto-return
-- Network connectivity monitoring
+1. Bring up the Scout bridge and confirm scan plus pose.
+2. Launch SLAM on the companion.
+3. If odometry is reliable enough, use `explore_lite` to cover the house.
+4. Save the final map on the companion.
+5. Record named room goals after the map is stable.
 
-## Next Steps
+The map should be saved on the companion first, then optionally copied elsewhere.
 
-1. Hardware integration and testing
-2. Sensor calibration
-3. SLAM tuning for your environment
-4. Path planning optimization
-5. Scheduling system implementation
-6. Safety system validation
+## 9. Patrol Workflow
 
-## Troubleshooting
+For patrol missions:
 
-### Common Issues
+- load the saved map with `map_server`
+- localize with `amcl`
+- define one or more room goals
+- capture stills or short clips at each goal
+- store media on the companion
+- optionally send a webhook or messaging notification after the route completes
 
-1. **Lidar not detected**: Check USB permissions and baud rate
-2. **Poor SLAM performance**: Adjust scan matching parameters
-3. **Navigation errors**: Calibrate wheel odometry and IMU
-4. **WiFi connectivity**: Set up static IP and network redundancy
+## 10. Dog Search Workflow
 
-### Debug Commands
+Recommended mission flow:
+
+1. Load the saved map and room graph.
+2. Visit each room in a deterministic order.
+3. Use either built-in Scout dog detection or offboard inference from the companion.
+4. Save a photo or short clip when the dog is found.
+5. Return a result containing room name, timestamp, and storage path or URL.
+
+This repo now treats heavyweight local Torch inference as offboard-only unless you prove otherwise on a stronger companion host.
+
+## 11. Headless Workflow
+
+Use these commands as the supported operator flow:
 
 ```bash
-# Check ROS topics
-rostopic list
-
-# Monitor Lidar data
-rostopic echo /scan
-
-# Check transform tree
-rosrun tf tf_monitor
-
-# View camera feed
-rosrun image_view image_view image:=/camera/image_raw
+./auto-scout deploy scout
+./auto-scout deploy companion
+./auto-scout validate system
+./auto-scout run smoke-loop
 ```
 
-## Resources
+## 12. Source References
 
-- [ROS Navigation Tuning Guide](http://wiki.ros.org/navigation/Tutorials/Navigation%20Tuning%20Guide)
-- [SLAM Tuning Parameters](http://wiki.ros.org/gmapping)
-- [Visual-Inertial Odometry](https://github.com/HKUST-Aerial-Robotics/VINS-Mono)
+- [Moorebot Scout product page](https://www.moorebot.com/en-ca/products/moorebot-scout)
+- [Moorebot Scout FAQ](https://www.moorebot.com/en-ca/pages/faq-for-moorebot-scout-2)
+- [Moorebot Scout User Manual V4.0](https://cdn.shopifycdn.net/s/files/1/0016/4616/6103/files/Scout_User_Manual_V4.0.pdf?v=1657247441)
+- [Pilot-Labs-Dev/Scout-open-source](https://github.com/Pilot-Labs-Dev/Scout-open-source)
+- [ROS REP-3 target platforms](https://www.ros.org/reps/rep-0003.html)
+- [m-explore / explore_lite](https://index.ros.org/r/m_explore/)

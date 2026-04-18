@@ -1,0 +1,17 @@
+[Unit]
+Description=Auto-Scout companion runtime
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/auto-scout
+ExecStart=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh up'
+ExecStop=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh down'
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

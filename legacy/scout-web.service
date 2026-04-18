@@ -1,0 +1,21 @@
+[Unit]
+Description=Auto-Scout web interface
+After=network.target scout-navigation.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=linaro
+Group=linaro
+WorkingDirectory=/home/linaro/catkin_ws/src/auto-scout
+Environment=AUTO_SCOUT_CONFIG=/home/linaro/catkin_ws/src/auto-scout/config/scout_config.yaml
+Environment=ROS_MASTER_URI=http://localhost:11311
+Environment=ROS_HOSTNAME=localhost
+ExecStart=/bin/bash -lc 'source /opt/ros/melodic/setup.bash && source /home/linaro/catkin_ws/devel/setup.bash && python3 /home/linaro/catkin_ws/src/auto-scout/src/scout_web_interface.py'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

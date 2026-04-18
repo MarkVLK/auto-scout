@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""
-Lidar sensor driver for youyeetoo FHL-LD19
-Publishes LaserScan messages for ROS navigation stack
-"""
+"""LiDAR driver for an LD19-class scanner."""
 
 import rospy
 import serial
 import struct
 import math
-import numpy as np
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
+
+from config_utils import load_scout_config
 
 class LD19LidarDriver:
     """
@@ -19,19 +17,26 @@ class LD19LidarDriver:
     
     def __init__(self):
         rospy.init_node('ld19_lidar_driver', anonymous=True)
-        
-        # Get parameters
-        self.port = rospy.get_param('~port', '/dev/ttyUSB0')
-        self.baudrate = rospy.get_param('~baudrate', 230400)
-        self.frame_id = rospy.get_param('~frame_id', 'base_laser')
-        self.angle_min = rospy.get_param('~angle_min', 0.0)
-        self.angle_max = rospy.get_param('~angle_max', 2 * math.pi)
-        self.range_min = rospy.get_param('~range_min', 0.02)  # 2cm
-        self.range_max = rospy.get_param('~range_max', 12.0)  # 12m
-        self.invert_scan = rospy.get_param('~invert_scan', False)
-        
-        # Initialize publisher
-        self.scan_pub = rospy.Publisher('/scan', LaserScan, queue_size=1)
+
+        config_path = rospy.get_param('~config_file', None)
+        self.config, self.config_path = load_scout_config(config_path)
+        if not isinstance(self.config, dict):
+            self.config = {}
+
+        lidar_config = self.config.get('lidar', {})
+        topic_config = self.config.get('topics', {})
+
+        self.port = rospy.get_param('~port', lidar_config.get('port', '/dev/ttyUSB0'))
+        self.baudrate = rospy.get_param('~baudrate', lidar_config.get('baudrate', 230400))
+        self.frame_id = rospy.get_param('~frame_id', lidar_config.get('frame_id', 'base_laser'))
+        self.angle_min = rospy.get_param('~angle_min', lidar_config.get('angle_min', 0.0))
+        self.angle_max = rospy.get_param('~angle_max', lidar_config.get('angle_max', 2 * math.pi))
+        self.range_min = rospy.get_param('~range_min', lidar_config.get('range_min', 0.02))
+        self.range_max = rospy.get_param('~range_max', lidar_config.get('range_max', 12.0))
+        self.invert_scan = rospy.get_param('~invert_scan', lidar_config.get('invert_scan', False))
+        self.scan_topic = rospy.get_param('~scan_topic', topic_config.get('lidar_scan', '/scan'))
+
+        self.scan_pub = rospy.Publisher(self.scan_topic, LaserScan, queue_size=1)
         
         # Initialize serial connection
         try:
@@ -52,7 +57,12 @@ class LD19LidarDriver:
         self.scan_data = {}
         self.last_scan_time = rospy.Time.now()
         
-        rospy.loginfo("LD19 Lidar driver initialized")
+        rospy.loginfo(
+            "LD19 lidar driver initialized (config: {}, topic: {})".format(
+                self.config_path or "defaults",
+                self.scan_topic,
+            )
+        )
     
     def parse_packet(self, packet):
         """Parse a single Lidar data packet"""

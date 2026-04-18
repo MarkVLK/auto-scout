@@ -27,7 +27,7 @@ setup(
     version="1.0.0",
     author="Auto-Scout Development Team",
     author_email="dev@auto-scout.com",
-    description="Autonomous pet search and rescue robot based on Moorebot Scout",
+    description="Clean-slate companion-first runtime for a Moorebot Scout with lidar",
     long_description=read_long_description(),
     long_description_content_type="text/markdown",
     url="https://github.com/your-org/auto-scout",
@@ -70,12 +70,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "scout-navigation=scout_navigation_controller:main",
-            "scout-web=scout_web_interface:main",
-            "scout-camera=scout_camera_driver:main",
-            "scout-lidar=ld19_lidar_driver:main",
-            "scout-voice=voice_command_interface:main",
-            "scout-detection=dog_detection_module:main",
+            "auto-scout=auto_scout.cli:main",
         ],
     },
     include_package_data=True,

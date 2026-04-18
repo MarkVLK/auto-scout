@@ -1,0 +1,22 @@
+[Unit]
+Description=Auto-Scout scout runtime
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=linaro
+Group=linaro
+WorkingDirectory=/home/linaro/catkin_ws/src/auto-scout
+Environment=AUTO_SCOUT_CONFIG=/home/linaro/catkin_ws/src/auto-scout/config/scout_config.yaml
+Environment=AUTO_SCOUT_SITE_CONFIG=/home/linaro/catkin_ws/src/auto-scout/config/site.yaml
+Environment=ROS_MASTER_URI=http://localhost:11311
+Environment=ROS_HOSTNAME=localhost
+ExecStart=/bin/bash -lc '/home/linaro/catkin_ws/src/auto-scout/scripts/start_scout_runtime.sh'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

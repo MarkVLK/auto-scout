@@ -1,0 +1,32 @@
+name: "smoke_loop"
+description: "Navigate a short room loop, return toward the dock area, capture a proof photo, and notify the operator."
+
+preconditions:
+  required_capabilities:
+    - "camera"
+    - "scan"
+    - "pose"
+
+route:
+  map_frame: "map"
+  loop_waypoints:
+    - "living_room"
+    - "hallway"
+    - "kitchen"
+    - "hallway"
+
+return:
+  mode: "dock_if_available"
+  fallback_waypoint: "charging_station"
+
+capture:
+  action: "still_photo"
+  output_name: "smoke-loop-proof.jpg"
+
+notification:
+  enabled: true
+  require_capability: "notify"
+  include_fields:
+    - "result"
+    - "artifact_dir"
+    - "photo_path"
