@@ -6,6 +6,8 @@ import ast
 import json
 import os
 import platform
+import re
+import shlex
 import shutil
 import sys
 import xml.etree.ElementTree as ET
@@ -19,9 +21,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from auto_scout.mission_config import load_mission_config
+from auto_scout.live_probe import ProbeExecutor
 from auto_scout.live_probe import probe_scout_capabilities
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
-from auto_scout.site_config import load_site_config, role_config
+from auto_scout.site_config import load_site_config, role_config, role_service_identity
 from auto_scout.yaml_loader import load_yaml
 from config_utils import load_scout_config
 
@@ -55,6 +58,8 @@ STATIC_PYTHON_DIRS = [
     "tools",
     "scripts",
 ]
+
+MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 
 def run_command(command):
@@ -161,6 +166,67 @@ def resolve_find_expression(package_name, value):
     return None
 
 
+def normalize_markdown_target(target):
+    """Normalize a markdown link target for local-path checks."""
+    value = (target or "").strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    return value
+
+
+def is_local_absolute_markdown_target(target):
+    """Return whether a markdown target points at a local filesystem path."""
+    value = normalize_markdown_target(target)
+    lowered = value.lower()
+    return bool(
+        value
+        and (
+            lowered.startswith("file://")
+            or value.startswith("/Users/")
+            or value.startswith("/home/")
+            or re.match(r"^[A-Za-z]:[\\/]", value)
+        )
+    )
+
+
+def find_local_markdown_link_targets(root_path):
+    """Return repo-relative markdown link issues that target local filesystems."""
+    root = Path(root_path)
+    issues = []
+    for path in sorted(root.rglob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        for target in MARKDOWN_LINK_PATTERN.findall(text):
+            normalized = normalize_markdown_target(target)
+            if is_local_absolute_markdown_target(normalized):
+                issues.append("{} -> {}".format(path.relative_to(root), normalized))
+    return issues
+
+
+def _parse_mode_bits(mode_text):
+    if not mode_text or len(mode_text) != 3 or not mode_text.isdigit():
+        return None
+    return int(mode_text[0]), int(mode_text[1]), int(mode_text[2])
+
+
+def _has_rw(bits):
+    return bits is not None and (bits & 6) == 6
+
+
+def _service_user_has_device_access(mode_text, owner, group, service_user, service_groups):
+    bits = _parse_mode_bits(mode_text)
+    if bits is None:
+        return False
+
+    user_bits, group_bits, other_bits = bits
+    if owner == service_user and _has_rw(user_bits):
+        return True
+    if group in service_groups and _has_rw(group_bits):
+        return True
+    if _has_rw(other_bits):
+        return True
+    return False
+
+
 class ReportBuilder:
     """Collect structured validation results."""
 
@@ -225,6 +291,21 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "pass",
             "README reflects the clean-slate scout/companion split",
             evidence={"readme_path": str(readme_path)},
+        )
+
+    markdown_link_issues = find_local_markdown_link_targets(REPO_ROOT)
+    if markdown_link_issues:
+        report.add(
+            "repo.docs_link_contract",
+            "fail",
+            "Markdown docs still contain local absolute filesystem links",
+            details=markdown_link_issues,
+        )
+    else:
+        report.add(
+            "repo.docs_link_contract",
+            "pass",
+            "Markdown docs use repo-relative or web-safe link targets",
         )
 
     inventory_issues = []
@@ -623,6 +704,7 @@ def _add_live_probe_check(report, site_config, effective_role, runtime_profile, 
         [
             "roles.scout.capabilities.pose",
             "roles.scout.capabilities.motion",
+            "roles.scout.devices.lidar",
             "roles.scout.topics.odom",
             "roles.scout.topics.vendor_cmd_vel",
             "roles.scout.ros.master_uri",
@@ -663,6 +745,111 @@ def _add_live_probe_check(report, site_config, effective_role, runtime_profile, 
         "Live Scout probe matched the declared Scout interface" if observe_motion else "Live Scout probe matched configured topics, but pose was not dynamically confirmed",
         details=details,
         evidence={"probe": probe_result},
+    )
+
+
+def _add_scout_serial_access_check(report, site_config, runtime_profile, live_probe_enabled):
+    scout = role_config(site_config, "scout")
+    lidar_path = scout.get("devices", {}).get("lidar")
+    service_user, service_group = role_service_identity(scout)
+
+    if not live_probe_enabled:
+        report.add(
+            "runtime.scout_serial_access",
+            "skip",
+            "Scout serial-access probing is disabled",
+            evidence={"service_user": service_user, "service_group": service_group},
+        )
+        return
+
+    executor = ProbeExecutor(scout, force_remote=runtime_profile != "likely_scout")
+
+    if not lidar_path:
+        report.add(
+            "runtime.scout_serial_access",
+            "fail",
+            "Scout lidar device is not configured",
+            details=["roles.scout.devices.lidar must be set before Scout LiDAR validation can pass."],
+        )
+        return
+
+    exists_result = executor.run(
+        "test -e {} && echo present || echo missing".format(shlex.quote(lidar_path)),
+        check=False,
+    )
+    if not exists_result.ok or "present" not in exists_result.stdout:
+        report.add(
+            "runtime.scout_serial_access",
+            "fail",
+            "Configured Scout lidar device is missing",
+            details=["Configured lidar device not found: {}".format(lidar_path)],
+            evidence={"service_user": service_user, "service_group": service_group},
+        )
+        return
+
+    stat_result = executor.run(
+        "stat -c '%a %U %G' {}".format(shlex.quote(lidar_path)),
+        check=False,
+    )
+    groups_result = executor.run(
+        "id -nG {}".format(shlex.quote(service_user)),
+        check=False,
+    )
+    if not stat_result.ok or not groups_result.ok:
+        details = []
+        if not stat_result.ok:
+            details.append("Could not inspect {} permissions.".format(lidar_path))
+        if not groups_result.ok:
+            details.append("Could not inspect groups for service user '{}'.".format(service_user))
+        report.add(
+            "runtime.scout_serial_access",
+            "warn",
+            "Scout lidar device exists, but serial-access validation was incomplete",
+            details=details,
+            evidence={"service_user": service_user, "service_group": service_group},
+        )
+        return
+
+    stat_fields = (stat_result.stdout or "").strip().split()
+    if len(stat_fields) < 3:
+        report.add(
+            "runtime.scout_serial_access",
+            "warn",
+            "Scout lidar device exists, but permission output could not be parsed",
+            details=["Unexpected stat output for {}: {}".format(lidar_path, stat_result.stdout.strip())],
+            evidence={"service_user": service_user, "service_group": service_group},
+        )
+        return
+
+    mode_text, owner, group = stat_fields[:3]
+    service_groups = [item for item in (groups_result.stdout or "").strip().split() if item]
+    if _service_user_has_device_access(mode_text, owner, group, service_user, service_groups):
+        report.add(
+            "runtime.scout_serial_access",
+            "pass",
+            "Scout service user can access the configured LiDAR serial device",
+            details=[
+                "Device: {} (mode {}, owner {}, group {})".format(lidar_path, mode_text, owner, group),
+                "Service user '{}' groups: {}".format(service_user, ", ".join(service_groups) or "none"),
+            ],
+        )
+        return
+
+    details = [
+        "Device: {} (mode {}, owner {}, group {})".format(lidar_path, mode_text, owner, group),
+        "Service user '{}' groups: {}".format(service_user, ", ".join(service_groups) or "none"),
+    ]
+    if group == "dialout" and "dialout" not in service_groups:
+        details.append("Service user '{}' is not in the 'dialout' group.".format(service_user))
+    elif group and group not in service_groups and owner != service_user:
+        details.append("Service user '{}' is not in the device group '{}'.".format(service_user, group))
+
+    report.add(
+        "runtime.scout_serial_access",
+        "fail",
+        "Scout service user cannot access the configured LiDAR serial device",
+        details=details,
+        evidence={"service_user": service_user, "service_group": service_group},
     )
 
 
@@ -903,6 +1090,7 @@ def add_runtime_checks(report, site_config, site_path, effective_role, runtime_p
 
     if effective_role in ["scout", "system"]:
         _add_scout_checks(report, site_config, runtime_profile)
+        _add_scout_serial_access_check(report, site_config, runtime_profile, live_probe_enabled)
 
     if effective_role in ["companion", "system"]:
         _add_companion_checks(report, site_config, runtime_profile)

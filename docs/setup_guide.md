@@ -11,6 +11,7 @@ Before you start, treat these as design constraints:
 - The Moorebot FAQ says only about 2 to 3 GB is user-accessible and there is no SD card slot.
 - The official Moorebot open-source repo recommends compiling in Ubuntu 18.04 and exposes a custom `rollereye` API plus a few ROS topics.
 - ROS Noetic targets Ubuntu 20.04 and Python 3.8, which does not line up with the public Scout environment.
+- The rooted Scout unit validated for this repo exposed Debian 9, ROS Melodic-era tooling, Python 2.7 ROS nodes, `/cmd_vel_force`, `/MotorNode/baselink_odom_relative`, `/MotorNode/vio_odom_relative`, and a free UART at `/dev/ttyS4`.
 
 Because of that, this project uses the Scout as a lightweight robot endpoint and moves SLAM, navigation, storage, and notifications to a companion system.
 
@@ -50,6 +51,8 @@ What you need from the Scout side:
 - camera access or video stream access
 - IMU and ToF access if available
 - a reliable way to start and stop media capture
+- enough writable space outside the root partition for the repo workspace; this repo now defaults the Scout workspace to `/userdata/catkin_ws/src/auto-scout`
+- a service user that can open the Scout LiDAR serial device; on the validated unit that meant `linaro` needed `dialout`
 
 If the public `rollereye` Python API is available, treat it as the primary Scout control API until you prove a more standard ROS interface exists on your unit.
 
@@ -68,12 +71,21 @@ For the LD19:
 - publish `/scan`
 - confirm a stable frame id and transform to `base_link`
 
+For the validated rooted Scout path in this repo:
+
+- the default Scout-attached LD19 device is `/dev/ttyS4`
+- the supported Scout-side bring-up path is the repo's built-in `src/ld19_lidar_driver.py`
+- Scout deploy is intended to stay source-only; do not treat building upstream C++ LD19 packages on the Scout as the supported baseline for this image
+- validate serial access with `./auto-scout validate scout` so missing `dialout` membership shows up as a runtime failure instead of a silent launch problem
+
 You can publish scan data either:
 
 - directly on the Scout, if serial access is reliable and CPU impact is low
 - on the companion, if the LiDAR is physically attached there instead
 
 The repo's launch files now assume that a scan publisher exists and avoid depending on a missing `lidar.launch`.
+
+If you are attaching the LD19 somewhere other than the Scout UART, override the default with `./auto-scout configure scout --lidar-device ...` or the matching deploy flag.
 
 ## 5. Companion ROS1 Stack
 

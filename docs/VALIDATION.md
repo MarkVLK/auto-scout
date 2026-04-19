@@ -29,6 +29,7 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 `--mode repo` checks:
 
 - README claims that define the companion-first architecture
+- markdown docs for workstation-only absolute links that break on GitHub
 - `config/site.yaml` inventory structure and declared capabilities
 - `config/missions/smoke_loop.yaml` mission contract
 - launch file structure for `scout-runtime` and `companion-runtime`
@@ -44,6 +45,7 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 - role declarations in `config/site.yaml`
 - companion storage directories and container stack expectations
 - Scout bridge, motion, camera, and scan capability declarations
+- Scout LiDAR serial-device presence and whether the configured service user can access it
 - whether live Scout probing matches the declared vendor topics, ROS networking, and capabilities
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
@@ -59,8 +61,10 @@ The most important runtime gate is pose:
 
 The most important runtime sanity check after that is live mismatch detection:
 
-- if live probe contradicts `roles.scout.capabilities.pose`, `roles.scout.capabilities.motion`, `roles.scout.topics.odom`, or `roles.scout.topics.vendor_cmd_vel`, treat that as a real integration failure
+- if live probe contradicts `roles.scout.devices.lidar`, `roles.scout.capabilities.pose`, `roles.scout.capabilities.motion`, `roles.scout.topics.odom`, or `roles.scout.topics.vendor_cmd_vel`, treat that as a real integration failure
 - if the cross-host ROS settings still advertise `localhost`, treat that as a deployment bug rather than a hardware limitation
+
+For the validated rooted Scout path, a common serial-access failure mode is a LiDAR device owned by `root:dialout` while the configured service user is not in `dialout`. `./auto-scout validate scout` now reports that explicitly.
 
 ## Probe Workflow
 
@@ -76,6 +80,8 @@ Use `--write-site` only when you want to apply the generated site-inventory sugg
 ```bash
 ./auto-scout probe scout --observe-motion 15 --write-site
 ```
+
+If you run validation with `--no-live-probe`, the Scout serial-access probe is skipped as well.
 
 ## Regression Test
 

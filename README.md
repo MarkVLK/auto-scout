@@ -26,7 +26,7 @@ That combination means:
 - Do not assume local storage is large or consistent enough to be the only place maps and patrol media live.
 - Do assume a rooted Scout can still be a useful sensor and motion endpoint if a companion computer handles mapping, planning, storage, and notifications.
 
-Detailed notes and source links live in [docs/VERIFIED_ARCHITECTURE.md](/Users/markvlcek/Code/auto-scout/docs/VERIFIED_ARCHITECTURE.md).
+Detailed notes and source links live in [docs/VERIFIED_ARCHITECTURE.md](docs/VERIFIED_ARCHITECTURE.md).
 
 ## Recommended Architecture
 
@@ -62,17 +62,28 @@ The supported v1 runtime surface is intentionally headless:
 
 - `auto-scout`
   the main CLI for deploy, validate, and mission runs
-- [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml)
+- [config/site.yaml](config/site.yaml)
   single inventory for Scout and Raspberry Pi 5 hosts, devices, storage, and declared capabilities
   the shipped sample now reflects one proven rooted Scout, but every real unit should still be probed and compared against hardware
-- [config/missions/smoke_loop.yaml](/Users/markvlcek/Code/auto-scout/config/missions/smoke_loop.yaml)
+- [config/missions/smoke_loop.yaml](config/missions/smoke_loop.yaml)
   canonical proof mission for a real room loop, return, photo capture, and notification
 - `launch/scout_runtime.launch`
   Scout-side launch for the thin bridge runtime, including vendor odometry and motion normalization
 - `launch/companion_runtime.launch`
   companion-side launch for localization or SLAM plus the companion runtime heartbeat
 
-Legacy browser and voice surfaces are quarantined under [legacy/README.md](/Users/markvlcek/Code/auto-scout/legacy/README.md). They are not part of the supported deployment path anymore.
+Legacy browser and voice surfaces are quarantined under [legacy/README.md](legacy/README.md). They are not part of the supported deployment path anymore.
+
+## Validated Scout Path
+
+For the rooted Scout unit validated in the LiDAR bring-up transcript, treat these as the supported Scout-side defaults:
+
+- Scout workspace: `/userdata/catkin_ws/src/auto-scout`
+- Scout LiDAR device: `/dev/ttyS4`
+- Scout ROS era: Melodic / Python 2.7
+- Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch`
+
+Do not treat building upstream C++ LD19 packages on the Scout as the supported baseline for this image. The current repo path is source-only deploy plus the built-in Python serial driver, with live probe and validation used to confirm the real unit still matches the saved inventory.
 
 ## Mission Goals
 
@@ -136,6 +147,8 @@ The install/deploy path is now designed to be configurable without hand-editing 
 - Pass values such as `--ssh-user`, `--ssh-host`, `--workspace-dir`, `--service-user`, or `--storage-root` on the CLI when you already know them
 - If you omit those flags in an interactive shell, the CLI prompts you with the current/default value and lets you accept it or replace it
 - Use `--non-interactive` when you want saved values or explicit flags to be used without prompts
+- The default Scout workspace now points at `/userdata/catkin_ws/src/auto-scout` so the rooted Scout path does not depend on scarce rootfs space
+- The default Scout-attached LD19 device now points at `/dev/ttyS4`; use `--lidar-device /dev/ttyUSB0` only when the LiDAR is physically attached somewhere else
 
 For example:
 
@@ -169,16 +182,16 @@ Treat the bring-up sequence as:
 
 ## Key Files
 
-- [docs/VERIFIED_ARCHITECTURE.md](/Users/markvlcek/Code/auto-scout/docs/VERIFIED_ARCHITECTURE.md): verified facts, compatibility matrix, and system design
-- [docs/setup_guide.md](/Users/markvlcek/Code/auto-scout/docs/setup_guide.md): step-by-step setup for Scout plus companion
-- [docs/QUICKSTART.md](/Users/markvlcek/Code/auto-scout/docs/QUICKSTART.md): short path to first mapping and patrol tests
-- [config/scout_config.yaml](/Users/markvlcek/Code/auto-scout/config/scout_config.yaml): runtime profile, storage policy, and mission settings
-- [check_scout_compatibility.py](/Users/markvlcek/Code/auto-scout/check_scout_compatibility.py): canonical validator for repo assumptions, runtime readiness, and mission prerequisites
-- [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml): reset-era inventory for Scout and companion roles
-- [config/missions/smoke_loop.yaml](/Users/markvlcek/Code/auto-scout/config/missions/smoke_loop.yaml): real-world smoke mission contract
-- [auto-scout](/Users/markvlcek/Code/auto-scout/auto-scout): headless deploy, validate, and mission CLI
-- [tools/deploy.sh](/Users/markvlcek/Code/auto-scout/tools/deploy.sh): supported Scout deployment entrypoint
-- [docs/VALIDATION.md](/Users/markvlcek/Code/auto-scout/docs/VALIDATION.md): how to run the validator and why older check scripts were retired
+- [docs/VERIFIED_ARCHITECTURE.md](docs/VERIFIED_ARCHITECTURE.md): verified facts, compatibility matrix, and system design
+- [docs/setup_guide.md](docs/setup_guide.md): step-by-step setup for Scout plus companion
+- [docs/QUICKSTART.md](docs/QUICKSTART.md): short path to first mapping and patrol tests
+- [config/scout_config.yaml](config/scout_config.yaml): runtime profile, storage policy, and mission settings
+- [check_scout_compatibility.py](check_scout_compatibility.py): canonical validator for repo assumptions, runtime readiness, and mission prerequisites
+- [config/site.yaml](config/site.yaml): reset-era inventory for Scout and companion roles
+- [config/missions/smoke_loop.yaml](config/missions/smoke_loop.yaml): real-world smoke mission contract
+- [auto-scout](auto-scout): headless deploy, validate, and mission CLI
+- [tools/deploy.sh](tools/deploy.sh): supported Scout deployment entrypoint
+- [docs/VALIDATION.md](docs/VALIDATION.md): how to run the validator and why older check scripts were retired
 
 ## Suggested Phased Plan
 

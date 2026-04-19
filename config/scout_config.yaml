@@ -93,7 +93,7 @@ safety:
   emergency_stop_distance: 0.15
 
 lidar:
-  port: "/dev/ttyUSB0"
+  port: "/dev/ttyS4"
   baudrate: 230400
   frame_id: "base_laser"
   range_min: 0.02

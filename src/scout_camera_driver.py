@@ -1,9 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 """Lightweight camera bridge for the clean-slate Scout runtime."""
 
 import argparse
 
 from config_utils import load_scout_config
+from scout_runtime_config import load_site_config
+from scout_runtime_config import scout_runtime_device
+from scout_runtime_config import scout_runtime_topic
 
 
 class ScoutCameraDriver:
@@ -16,8 +19,6 @@ class ScoutCameraDriver:
             from sensor_msgs.msg import CompressedImage
         except ImportError as exc:
             raise SystemExit("Camera bridge requires ROS + OpenCV packages: {}".format(exc))
-
-        from auto_scout.site_config import load_site_config, scout_runtime_device, scout_runtime_topic
 
         self.cv2 = cv2
         self.rospy = rospy
@@ -71,7 +72,10 @@ class ScoutCameraDriver:
             message.header.stamp = self.rospy.Time.now()
             message.header.frame_id = self.frame_id
             message.format = "jpeg"
-            message.data = encoded.tobytes()
+            if hasattr(encoded, "tobytes"):
+                message.data = encoded.tobytes()
+            else:
+                message.data = encoded.tostring()
             self.publisher.publish(message)
             rate.sleep()
 

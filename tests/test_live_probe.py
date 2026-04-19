@@ -26,9 +26,8 @@ class FakeCommandResult:
 class FakeRunner:
     """Deterministic command runner for probe unit tests."""
 
-    def run(self, command, cwd=None, check=True):
-        command_text = command if isinstance(command, str) else " ".join(command)
-        lookup = {
+    def __init__(self, overrides=None):
+        self.lookup = {
             "printf 'ROS_MASTER_URI=%s": FakeCommandResult(
                 stdout="ROS_MASTER_URI=http://moorebot-scout.local:11311\nROS_HOSTNAME=moorebot-scout.local\nROS_IP=\n",
             ),
@@ -37,7 +36,8 @@ class FakeRunner:
             ),
             "rosnode list": FakeCommandResult(stdout="/MotorNode\n"),
             "test -e /dev/video0": FakeCommandResult(stdout="present\n"),
-            "test -e /dev/ttyUSB0": FakeCommandResult(stdout="present\n"),
+            "test -e /dev/ttyS4": FakeCommandResult(stdout="present\n"),
+            "test -e /dev/ttyUSB0": FakeCommandResult(stdout="missing\n"),
             "rostopic info /scan": FakeCommandResult(stdout="Type: sensor_msgs/LaserScan\nPublishers:\n * /ld19\nSubscribers:\n"),
             "rostopic hz -w 5 /scan": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
             "rostopic echo -n 1 /scan": FakeCommandResult(stdout="header:\n"),
@@ -47,6 +47,11 @@ class FakeRunner:
             "rostopic info /MotorNode/baselink_odom_relative": FakeCommandResult(stdout="Type: nav_msgs/Odometry\nPublishers:\n * /MotorNode\nSubscribers:\n"),
             "rostopic hz -w 5 /MotorNode/baselink_odom_relative": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
             "rostopic echo -n 1 /MotorNode/baselink_odom_relative": FakeCommandResult(
+                stdout='header:\n  frame_id: "world"\nchild_frame_id: "base_link"\npose:\n  pose:\n    orientation:\n      w: 1.0\n',
+            ),
+            "rostopic info /MotorNode/vio_odom_relative": FakeCommandResult(stdout="Type: nav_msgs/Odometry\nPublishers:\n * /MotorNode\nSubscribers:\n"),
+            "rostopic hz -w 5 /MotorNode/vio_odom_relative": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
+            "rostopic echo -n 1 /MotorNode/vio_odom_relative": FakeCommandResult(
                 stdout='header:\n  frame_id: "world"\nchild_frame_id: "base_link"\npose:\n  pose:\n    orientation:\n      w: 1.0\n',
             ),
             "rostopic info /cmd_vel_force": FakeCommandResult(stdout="Type: geometry_msgs/Twist\nPublishers:\nSubscribers:\n * /MotorNode\n"),
@@ -60,7 +65,11 @@ class FakeRunner:
                 stdout="%time,field.pose.pose.position.x,field.pose.pose.position.y,field.pose.pose.orientation.z\n1.0,0.0,0.0,0.0\n2.0,0.09,0.02,0.0\n",
             ),
         }
-        for needle, result in lookup.items():
+        self.lookup.update(overrides or {})
+
+    def run(self, command, cwd=None, check=True):
+        command_text = command if isinstance(command, str) else " ".join(command)
+        for needle, result in self.lookup.items():
             if needle in command_text:
                 return result
         return FakeCommandResult(ok=False, stderr="unexpected command: {}".format(command_text))
@@ -86,6 +95,31 @@ class LiveProbeTest(unittest.TestCase):
         self.assertTrue(result["inferred_capabilities"]["pose"])
         self.assertTrue(result["inferred_capabilities"]["motion"])
         self.assertEqual(result["config_mismatch_suggestions"], [])
+
+    def test_probe_suggests_ttys4_and_vio_odom_when_defaults_are_wrong(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["devices"]["lidar"] = "/dev/ttyUSB0"
+        site_config["roles"]["scout"]["topics"]["odom"] = "/odom"
+        runner = FakeRunner(
+            overrides={
+                "rostopic list": FakeCommandResult(
+                    stdout="/scan\n/camera/image_raw/compressed\n/MotorNode/vio_odom_relative\n/cmd_vel_force\n",
+                ),
+            }
+        )
+
+        result = probe_scout_capabilities(
+            site_config,
+            observe_motion_seconds=0,
+            exercise_cmd_vel=False,
+            runner=runner,
+            force_remote=True,
+        )
+
+        self.assertTrue(result["ok"])
+        suggestions = {item["path"]: item["suggested"] for item in result["config_mismatch_suggestions"]}
+        self.assertEqual(suggestions["roles.scout.devices.lidar"], "/dev/ttyS4")
+        self.assertEqual(suggestions["roles.scout.topics.odom"], "/MotorNode/vio_odom_relative")
 
     def test_apply_probe_suggestions_updates_site_inventory(self):
         site_config = default_site_config()

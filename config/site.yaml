@@ -5,7 +5,7 @@ project:
 roles:
   scout:
     hostname: "moorebot-scout"
-    workspace_dir: "/home/linaro/catkin_ws/src/auto-scout"
+    workspace_dir: "/userdata/catkin_ws/src/auto-scout"
     ssh:
       host: "moorebot-scout.local"
       user: "linaro"
@@ -18,7 +18,7 @@ roles:
       advertise_host: "moorebot-scout.local"
     devices:
       camera: "/dev/video0"
-      lidar: "/dev/ttyUSB0"
+      lidar: "/dev/ttyS4"
     topics:
       camera_compressed: "/camera/image_raw/compressed"
       lidar_scan: "/scan"

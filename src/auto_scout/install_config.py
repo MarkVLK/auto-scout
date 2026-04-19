@@ -132,7 +132,7 @@ def configure_role(site_config, role, args, prompt=False):
         )
         devices["lidar"] = args.lidar_device or _maybe_prompt(
             "Scout lidar device",
-            devices.get("lidar", "/dev/ttyUSB0"),
+            devices.get("lidar", "/dev/ttyS4"),
             prompt=prompt,
         )
 

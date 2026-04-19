@@ -16,6 +16,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from check_scout_compatibility import find_local_markdown_link_targets
 from auto_scout.yaml_loader import load_yaml
 from auto_scout.yaml_loader import write_yaml
 
@@ -75,6 +76,7 @@ class ValidationCliTest(unittest.TestCase):
 
         expected_checks = {
             "repo.readme_contract",
+            "repo.docs_link_contract",
             "repo.inventory_contract",
             "repo.mission_contract",
             "repo.launch_contract",
@@ -165,6 +167,19 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["user"], "automark")
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["port"], 2200)
         self.assertEqual(site_config["roles"]["companion"]["storage"]["events_dir"], "/var/lib/auto-scout/events")
+
+    def test_markdown_link_helper_flags_local_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            readme_path = temp_root / "README.md"
+            readme_path.write_text(
+                "[bad](/Users/example/auto-scout/docs/setup_guide.md)\n[good](docs/setup_guide.md)\n",
+                encoding="utf-8",
+            )
+
+            issues = find_local_markdown_link_targets(temp_root)
+
+        self.assertEqual(issues, ["README.md -> /Users/example/auto-scout/docs/setup_guide.md"])
 
     def test_runtime_mode_reports_pose_gate_pass_on_default_site(self):
         result = run_validator("--mode", "runtime", "--role", "system", "--json", "--no-live-probe")

@@ -30,7 +30,7 @@ def current_username():
 
 def scout_workspace_for_user(user):
     """Return the default Scout workspace for the given user."""
-    return "/home/{}/catkin_ws/src/auto-scout".format(user)
+    return "/userdata/catkin_ws/src/auto-scout"
 
 
 def companion_workspace_for_user(user):
@@ -104,7 +104,7 @@ def default_site_config():
                 },
                 "devices": {
                     "camera": "/dev/video0",
-                    "lidar": "/dev/ttyUSB0",
+                    "lidar": "/dev/ttyS4",
                 },
                 "topics": {
                     "camera_compressed": "/camera/image_raw/compressed",

@@ -1,9 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 """Bridge vendor odometry into standard /odom plus TF."""
 
 import argparse
 
 from config_utils import load_scout_config
+from scout_runtime_config import load_site_config
+from scout_runtime_config import role_config
+from scout_runtime_config import role_motion_setting
+from scout_runtime_config import scout_runtime_topic
 
 
 class ScoutOdomBridge:
@@ -17,8 +21,6 @@ class ScoutOdomBridge:
             from tf2_ros import TransformBroadcaster
         except ImportError as exc:
             raise SystemExit("Scout odom bridge requires ROS Python packages: {}".format(exc))
-
-        from auto_scout.site_config import load_site_config, role_config, role_motion_setting, scout_runtime_topic
 
         self.rospy = rospy
         self.Odometry = Odometry

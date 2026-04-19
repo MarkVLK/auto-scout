@@ -25,7 +25,7 @@ DEFAULT_OBSERVE_MOTION_SECONDS = 0.0
 TOPIC_CANDIDATES = {
     "lidar_scan": ["/scan"],
     "camera_compressed": ["/camera/image_raw/compressed"],
-    "odom": ["/MotorNode/baselink_odom_relative", "/odom"],
+    "odom": ["/MotorNode/baselink_odom_relative", "/MotorNode/vio_odom_relative", "/odom"],
     "vendor_cmd_vel": ["/cmd_vel_force", "/cmd_vel"],
 }
 
@@ -34,6 +34,11 @@ TOPIC_TYPES = {
     "camera_compressed": "sensor_msgs/CompressedImage",
     "odom": "nav_msgs/Odometry",
     "vendor_cmd_vel": "geometry_msgs/Twist",
+}
+
+DEVICE_CANDIDATES = {
+    "camera": ["/dev/video0"],
+    "lidar": ["/dev/ttyS4", "/dev/ttyUSB0"],
 }
 
 
@@ -218,14 +223,40 @@ def _candidate_topics(role_settings, key):
     return values
 
 
-def _check_device(executor, path):
-    if not path:
-        return {"configured": None, "exists": None}
+def _candidate_devices(role_settings, key):
+    configured = role_device(role_settings, key)
+    values = []
+    for item in [configured] + DEVICE_CANDIDATES.get(key, []):
+        if item and item not in values:
+            values.append(item)
+    return values
+
+
+def _device_exists(executor, path):
     result = executor.run("test -e {} && echo present || echo missing".format(shlex.quote(path)), check=False)
-    return {
+    return result.ok and "present" in result.stdout
+
+
+def _check_device(executor, path, candidates=None):
+    payload = {
         "configured": path,
-        "exists": result.ok and "present" in result.stdout,
+        "exists": None,
+        "selected": None,
+        "alternatives": [],
     }
+    if path:
+        payload["exists"] = _device_exists(executor, path)
+        if payload["exists"]:
+            payload["selected"] = path
+
+    for candidate in candidates or []:
+        if not candidate or candidate == path:
+            continue
+        if _device_exists(executor, candidate):
+            payload["alternatives"].append(candidate)
+            if payload["selected"] is None:
+                payload["selected"] = candidate
+    return payload
 
 
 def _topic_details(executor, topic_name):
@@ -298,6 +329,29 @@ rm -f "${{tmp_file}}"
 def _compare_site_config(site_config, observed, inferred_capabilities):
     scout = role_config(site_config, "scout")
     suggestions = []
+
+    for device_name in ["camera", "lidar"]:
+        observed_device = observed.get("devices", {}).get(device_name, {})
+        suggested = observed_device.get("selected")
+        current = role_device(scout, device_name)
+        if not suggested or current == suggested:
+            continue
+
+        reason = "Live probe found Scout {} device '{}'.".format(device_name, suggested)
+        if current and not observed_device.get("exists"):
+            reason = "Configured Scout {} device '{}' was missing; live probe found '{}'.".format(
+                device_name,
+                current,
+                suggested,
+            )
+        suggestions.append(
+            {
+                "path": "roles.scout.devices.{}".format(device_name),
+                "current": current,
+                "suggested": suggested,
+                "reason": reason,
+            }
+        )
 
     for topic_key in ["odom", "vendor_cmd_vel", "lidar_scan", "camera_compressed"]:
         observed_topic = observed.get("topics", {}).get(topic_key, {})
@@ -415,7 +469,11 @@ def probe_scout_capabilities(
     payload["observed"]["nodes"] = [line.strip() for line in node_list_result.stdout.splitlines() if line.strip()]
 
     for device_name in ["camera", "lidar"]:
-        payload["observed"]["devices"][device_name] = _check_device(executor, role_device(scout, device_name))
+        payload["observed"]["devices"][device_name] = _check_device(
+            executor,
+            role_device(scout, device_name),
+            candidates=_candidate_devices(scout, device_name),
+        )
 
     selected_topics = {}
     for topic_key in ["lidar_scan", "camera_compressed", "odom", "vendor_cmd_vel"]:
