@@ -12,12 +12,13 @@ RUN apt-get update && apt-get install -y \
     curl \
     gnupg2 \
     lsb-release \
-    python3 \
-    python3-pip \
-    python3-rosdep \
-    python3-rosinstall \
-    python3-rosinstall-generator \
-    python3-vcstools \
+    python \
+    python-catkin-tools \
+    python-requests \
+    python-rosdep \
+    python-rosinstall \
+    python-rosinstall-generator \
+    python-vcstools \
     build-essential \
     rsync \
  && rm -rf /var/lib/apt/lists/*
@@ -34,6 +35,7 @@ RUN curl -sSL 'https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc' |
     ros-melodic-dwa-local-planner \
     ros-melodic-global-planner \
     ros-melodic-costmap-2d \
+    ros-melodic-explore-lite \
     ros-melodic-joint-state-publisher \
     ros-melodic-robot-state-publisher \
     ros-melodic-rviz \
@@ -42,7 +44,7 @@ RUN curl -sSL 'https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc' |
     ros-melodic-image-transport \
  && rm -rf /var/lib/apt/lists/*
 
-RUN rosdep init || true
+RUN rosdep init || true && rosdep update
 
 WORKDIR /opt/catkin_ws/src/auto-scout
 COPY . /opt/catkin_ws/src/auto-scout

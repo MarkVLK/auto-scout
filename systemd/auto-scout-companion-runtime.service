@@ -11,8 +11,8 @@ RemainAfterExit=yes
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/auto-scout
-Environment=AUTO_SCOUT_ROS_MASTER_URI=http://moorebot-scout.local:11311
-Environment=AUTO_SCOUT_ROS_HOSTNAME=auto-scout-pi5.local
+Environment=AUTO_SCOUT_ROS_MASTER_URI=http://scout-host-or-ip:11311
+Environment=AUTO_SCOUT_ROS_HOSTNAME=companion-host-or-ip
 ExecStart=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh up'
 ExecStop=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh down'
 TimeoutStartSec=0

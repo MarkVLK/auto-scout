@@ -73,6 +73,7 @@ catkin_install_python(PROGRAMS
   src/scout_navigation_controller.py
   src/scout_runtime_agent.py
   src/companion_runtime_agent.py
+  src/map_file_guard.py
   src/ld19_lidar_driver.py
   src/scout_camera_driver.py
   src/scout_motion_bridge.py

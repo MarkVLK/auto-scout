@@ -32,4 +32,4 @@ services:
         roslaunch auto-scout companion_runtime.launch
         config_file:=/opt/catkin_ws/src/auto-scout/config/scout_config.yaml
         site_file:=/opt/catkin_ws/src/auto-scout/config/site.yaml
-        localization_mode:=true
+        localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}

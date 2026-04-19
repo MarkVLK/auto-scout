@@ -101,6 +101,18 @@ def configure_role(site_config, role, args, prompt=False):
         prompt=prompt,
     )
 
+    ros_settings = role_settings.setdefault("ros", {})
+    ros_settings["master_uri"] = args.ros_master_uri or _maybe_prompt(
+        "{} ROS master URI".format(role.capitalize()),
+        ros_settings.get("master_uri"),
+        prompt=prompt,
+    )
+    ros_settings["advertise_host"] = args.advertise_host or _maybe_prompt(
+        "{} ROS advertised host".format(role.capitalize()),
+        ros_settings.get("advertise_host"),
+        prompt=prompt,
+    )
+
     service_user_default = role_settings.get("service_user") or ssh_user
     role_settings["service_user"] = args.service_user or _maybe_prompt(
         "{} service user".format(role.capitalize()),

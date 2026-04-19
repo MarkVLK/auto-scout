@@ -49,6 +49,7 @@ Before touching autonomy:
 - on the validated rooted Scout path, keep the Scout workspace under `/userdata/catkin_ws/src/auto-scout`
 - on the validated rooted Scout path, treat `/dev/ttyS4` as the default Scout-attached LD19 device
 - use the repo's built-in `ld19_lidar_driver.py` as the supported Scout-side LD19 path; do not treat building upstream C++ LD19 packages on the Scout as the baseline bring-up
+- if the Scout still has an older external `ldlidar.service`, stop and disable it before launching the repo-managed Scout runtime so two processes do not fight over `/dev/ttyS4`
 - confirm you have a usable pose or odometry source by running `./auto-scout probe scout --observe-motion 15`
 - confirm the Scout-side compatibility bridges expose standard `/odom` and `/scout/cmd_vel_companion`
 
@@ -65,6 +66,8 @@ Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is
 ./auto-scout validate system --observe-motion 15
 roslaunch auto-scout slam_mapping.launch
 ```
+
+The deployed companion container now defaults to mapping mode. Leave `AUTO_SCOUT_LOCALIZATION_MODE=false` for first bring-up, save a map to `/srv/auto-scout/maps/house_map.yaml`, then switch `AUTO_SCOUT_LOCALIZATION_MODE=true` only after that file exists.
 
 If you have reliable scan plus pose, you can:
 

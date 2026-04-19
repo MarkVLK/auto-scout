@@ -3,7 +3,7 @@
   <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
   <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml" />
-  <arg name="localization_mode" default="true" />
+  <arg name="localization_mode" default="false" />
 
   <rosparam file="$(arg config_file)" command="load" />
 

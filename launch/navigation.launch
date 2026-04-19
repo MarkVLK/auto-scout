@@ -12,6 +12,10 @@
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml"/>
   <arg name="autonomy_cmd_vel" default="/scout/cmd_vel_companion"/>
 
+  <node name="map_file_guard" pkg="auto-scout" type="map_file_guard.py" output="screen" required="true">
+    <param name="map_file" value="$(arg map_file)"/>
+  </node>
+
   <!-- Load a previously saved occupancy grid -->
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
 

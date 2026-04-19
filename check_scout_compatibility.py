@@ -383,7 +383,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "scout_odom_bridge",
         ],
         "launch/companion_runtime.launch": ["companion_runtime_agent"],
-        "launch/navigation.launch": ["map_server", "amcl", "move_base"],
+        "launch/navigation.launch": ["map_file_guard", "map_server", "amcl", "move_base"],
         "launch/slam_mapping.launch": ["robot_state_publisher", "slam_gmapping"],
     }
     for relative_path, node_names in expected_nodes.items():
@@ -477,6 +477,20 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
         if "/opt/ros/melodic/setup.bash" not in compose_text:
             container_issues.append("companion-runtime command must source /opt/ros/melodic/setup.bash")
+        if "localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}" not in compose_text:
+            container_issues.append("companion-runtime must default localization_mode from AUTO_SCOUT_LOCALIZATION_MODE")
+
+    companion_start_path = REPO_ROOT / "scripts" / "start_companion_stack.sh"
+    if companion_start_path.is_file():
+        companion_start_text = companion_start_path.read_text(encoding="utf-8")
+        if 'require_env AUTO_SCOUT_ROS_MASTER_URI' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must fail fast when AUTO_SCOUT_ROS_MASTER_URI is unset")
+        if 'require_env AUTO_SCOUT_ROS_HOSTNAME' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must fail fast when AUTO_SCOUT_ROS_HOSTNAME is unset")
+        if 'AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_LOCALIZATION_MODE with a mapping-safe default")
+        if 'AUTO_SCOUT_ROS_MASTER_URI="${AUTO_SCOUT_ROS_MASTER_URI:-http://moorebot-scout.local:11311}"' in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must not silently default ROS master settings to moorebot-scout.local")
 
     if dockerfile_path.is_file():
         dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
@@ -485,6 +499,9 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "ros-melodic-ros-base",
             "ros-melodic-gmapping",
             "ros-melodic-move-base",
+            "ros-melodic-explore-lite",
+            "python-rosdep",
+            "rosdep init || true && rosdep update",
         ]
         for item in required_dockerfile_strings:
             if item not in dockerfile_text:

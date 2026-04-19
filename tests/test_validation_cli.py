@@ -17,6 +17,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from check_scout_compatibility import find_local_markdown_link_targets
+from auto_scout.deploy import _render_companion_service
+from auto_scout.deploy import _render_scout_service
+from auto_scout.mission_runner import _build_smoke_loop_remote_command
+from auto_scout.site_config import default_site_config
 from auto_scout.yaml_loader import load_yaml
 from auto_scout.yaml_loader import write_yaml
 
@@ -128,6 +132,10 @@ class ValidationCliTest(unittest.TestCase):
                 "automark",
                 "--workspace-dir",
                 "/home/automark/auto-scout",
+                "--ros-master-uri",
+                "http://192.168.0.199:11311",
+                "--advertise-host",
+                "pi5-host",
                 "--service-user",
                 "automark",
                 "--service-group",
@@ -144,6 +152,8 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(payload["role"], "companion")
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["user"], "automark")
         self.assertEqual(site_config["roles"]["companion"]["workspace_dir"], "/home/automark/auto-scout")
+        self.assertEqual(site_config["roles"]["companion"]["ros"]["master_uri"], "http://192.168.0.199:11311")
+        self.assertEqual(site_config["roles"]["companion"]["ros"]["advertise_host"], "pi5-host")
         self.assertEqual(site_config["roles"]["companion"]["storage"]["maps_dir"], "/mnt/auto-scout/maps")
 
     def test_cli_configure_companion_prompt_accepts_values(self):
@@ -155,7 +165,18 @@ class ValidationCliTest(unittest.TestCase):
                 "configure",
                 "companion",
                 "--prompt",
-                input_text="\nprompted-pi.local\nautomark\n2200\n/home/automark/auto-scout\nautomark\nautomark\n/var/lib/auto-scout\n",
+                input_text=(
+                    "\n"
+                    "prompted-pi.local\n"
+                    "automark\n"
+                    "2200\n"
+                    "/home/automark/auto-scout\n"
+                    "http://192.168.0.199:11311\n"
+                    "pi5-host\n"
+                    "automark\n"
+                    "automark\n"
+                    "/var/lib/auto-scout\n"
+                ),
             )
 
             self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
@@ -215,6 +236,54 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(payload["role"], "scout")
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["service"], "auto-scout-scout-runtime.service")
+
+    def test_rendered_services_use_saved_ros_endpoints(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
+        site_config["roles"]["scout"]["ros"]["advertise_host"] = "192.168.0.199"
+        site_config["roles"]["companion"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
+        site_config["roles"]["companion"]["ros"]["advertise_host"] = "pi5-host"
+
+        scout_service = _render_scout_service(site_config["roles"]["scout"])
+        companion_service = _render_companion_service(site_config["roles"]["companion"])
+
+        self.assertIn("Environment=ROS_MASTER_URI=http://192.168.0.199:11311", scout_service)
+        self.assertIn("Environment=ROS_HOSTNAME=192.168.0.199", scout_service)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_MASTER_URI=http://192.168.0.199:11311", companion_service)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=pi5-host", companion_service)
+
+    def test_companion_startup_contract_uses_mapping_default_and_explicit_ros_env(self):
+        compose_text = (REPO_ROOT / "container" / "docker-compose.yml").read_text(encoding="utf-8")
+        start_script = (REPO_ROOT / "scripts" / "start_companion_stack.sh").read_text(encoding="utf-8")
+        companion_launch = (REPO_ROOT / "launch" / "companion_runtime.launch").read_text(encoding="utf-8")
+        env_example = (REPO_ROOT / "container" / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}", compose_text)
+        self.assertIn('AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"', start_script)
+        self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
+        self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
+        self.assertNotIn("moorebot-scout.local", start_script)
+        self.assertIn('<arg name="localization_mode" default="false" />', companion_launch)
+        self.assertIn("AUTO_SCOUT_ROS_MASTER_URI=http://<scout-ip>:11311", env_example)
+
+    def test_smoke_loop_command_runs_inside_companion_container(self):
+        site_config = default_site_config()
+        site_config["roles"]["companion"]["ros"]["container_name"] = "auto-scout-melodic"
+
+        class DummyArtifactRun:
+            path = REPO_ROOT / "artifacts" / "runs" / "smoke-loop" / "run-001"
+
+        command = _build_smoke_loop_remote_command(
+            site_config["roles"]["companion"],
+            str(REPO_ROOT / "config" / "missions" / "smoke_loop.yaml"),
+            DummyArtifactRun(),
+        )
+
+        self.assertIn("docker exec auto-scout-melodic /bin/bash -lc", command)
+        self.assertIn("source /opt/ros/melodic/setup.bash", command)
+        self.assertIn("python2 src/scout_navigation_controller.py", command)
+        self.assertNotIn("python3 src/scout_navigation_controller.py", command)
+        self.assertIn("/opt/catkin_ws/src/auto-scout/config/site.yaml", command)
 
     def test_cli_smoke_loop_dry_run_fails_fast_on_unverified_site(self):
         result = run_cli("run", "smoke-loop", "--dry-run")

@@ -7,15 +7,15 @@ roles:
     hostname: "moorebot-scout"
     workspace_dir: "/userdata/catkin_ws/src/auto-scout"
     ssh:
-      host: "moorebot-scout.local"
+      host: "192.168.0.199"
       user: "linaro"
       port: 22
     service_user: "linaro"
     service_group: "linaro"
     ros:
       distro: "melodic"
-      master_uri: "http://moorebot-scout.local:11311"
-      advertise_host: "moorebot-scout.local"
+      master_uri: "http://192.168.0.199:11311"
+      advertise_host: "192.168.0.199"
     devices:
       camera: "/dev/video0"
       lidar: "/dev/ttyS4"
@@ -60,7 +60,7 @@ roles:
       distro: "melodic"
       container_name: "auto-scout-melodic"
       compose_file: "container/docker-compose.yml"
-      master_uri: "http://moorebot-scout.local:11311"
+      master_uri: "http://192.168.0.199:11311"
       advertise_host: "auto-scout-pi5.local"
     capabilities:
       camera: false

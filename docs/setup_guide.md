@@ -77,6 +77,7 @@ For the validated rooted Scout path in this repo:
 - the supported Scout-side bring-up path is the repo's built-in `src/ld19_lidar_driver.py`
 - Scout deploy is intended to stay source-only; do not treat building upstream C++ LD19 packages on the Scout as the supported baseline for this image
 - validate serial access with `./auto-scout validate scout` so missing `dialout` membership shows up as a runtime failure instead of a silent launch problem
+- if the Scout already runs an external `ldlidar.service`, stop and disable it before using `scout_runtime.launch` so `/dev/ttyS4` is owned by the repo-managed driver
 
 You can publish scan data either:
 
@@ -105,6 +106,8 @@ Recommended operator flow:
   --ssh-host auto-scout-pi5.local \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
+  --ros-master-uri http://192.168.0.199:11311 \
+  --advertise-host auto-scout-pi5.local \
   --storage-root /srv/auto-scout
 
 # Then deploy
@@ -117,6 +120,8 @@ Container expectations:
 - `network_mode: host`
 - ROS1-era autonomy packages inside the container
 - Scout-side motion and sensor integration kept outside the container boundary unless proven otherwise on your unit
+
+For direct `docker compose` usage outside `./auto-scout deploy companion`, copy `container/.env.example` to `container/.env` and replace the placeholder ROS values before you start the service.
 
 Recommended package set:
 

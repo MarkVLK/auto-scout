@@ -71,6 +71,8 @@ def _add_role_config_arguments(parser):
     parser.add_argument("--ssh-user", default=None, help="SSH username for the selected role")
     parser.add_argument("--ssh-port", type=int, default=None, help="SSH port for the selected role")
     parser.add_argument("--workspace-dir", default=None, help="Remote workspace directory for the selected role")
+    parser.add_argument("--ros-master-uri", default=None, help="ROS master URI for the selected role")
+    parser.add_argument("--advertise-host", default=None, help="ROS advertised host or IP for the selected role")
     parser.add_argument("--service-user", default=None, help="Systemd service user; defaults to the SSH user")
     parser.add_argument("--service-group", default=None, help="Systemd service group; defaults to the service user")
     parser.add_argument("--storage-root", default=None, help="Companion storage root; maps/media/events live under it")

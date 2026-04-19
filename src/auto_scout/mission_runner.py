@@ -1,10 +1,14 @@
 """Helpers for invoking named missions through the companion runtime."""
 
 import os
+import shlex
 
 from auto_scout.command_runner import CommandRunner
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG
 from auto_scout.site_config import role_config, system_capabilities
+
+
+CONTAINER_WORKSPACE = "/opt/catkin_ws/src/auto-scout"
 
 
 def evaluate_smoke_loop_gate(site_config, mission_config):
@@ -40,6 +44,40 @@ def evaluate_smoke_loop_gate(site_config, mission_config):
     }
 
 
+def _build_smoke_loop_remote_command(companion, mission_path, artifact_run):
+    """Return the remote command that runs the smoke loop inside the companion container."""
+    ros_settings = companion.get("ros", {})
+    container_name = ros_settings.get("container_name", "auto-scout-melodic")
+    container_site = os.path.join(CONTAINER_WORKSPACE, "config", "site.yaml")
+    container_config = os.path.join(CONTAINER_WORKSPACE, "config", os.path.basename(str(DEFAULT_SCOUT_CONFIG)))
+    container_mission = os.path.join(CONTAINER_WORKSPACE, "config", "missions", os.path.basename(mission_path))
+    container_artifact_dir = os.path.join(
+        CONTAINER_WORKSPACE,
+        "artifacts",
+        "runs",
+        os.path.basename(str(artifact_run.path)),
+    )
+    inner_command = (
+        "source /opt/ros/melodic/setup.bash && "
+        "if [ -f /opt/catkin_ws/devel/setup.bash ]; then source /opt/catkin_ws/devel/setup.bash; fi && "
+        "cd {workspace} && "
+        "AUTO_SCOUT_SITE_CONFIG={site} "
+        "AUTO_SCOUT_CONFIG={config} "
+        "python2 src/scout_navigation_controller.py "
+        "--site {site} --config {config} --mission {mission} --artifact-dir {artifact}"
+    ).format(
+        workspace=shlex.quote(CONTAINER_WORKSPACE),
+        site=shlex.quote(container_site),
+        config=shlex.quote(container_config),
+        mission=shlex.quote(container_mission),
+        artifact=shlex.quote(container_artifact_dir),
+    )
+    return "docker exec {container} /bin/bash -lc {command}".format(
+        container=shlex.quote(container_name),
+        command=shlex.quote(inner_command),
+    )
+
+
 def run_smoke_loop(site_config, site_path, mission_config, mission_path, artifact_run, dry_run=False):
     """Invoke the smoke loop on the companion host."""
     gate = evaluate_smoke_loop_gate(site_config, mission_config)
@@ -53,25 +91,7 @@ def run_smoke_loop(site_config, site_path, mission_config, mission_path, artifac
 
     companion = role_config(site_config, "companion")
     runner = CommandRunner(artifact_run=artifact_run, dry_run=dry_run)
-    workspace_dir = companion["workspace_dir"]
-    remote_site = os.path.join(workspace_dir, "config", "site.yaml")
-    remote_config = os.path.join(workspace_dir, "config", os.path.basename(str(DEFAULT_SCOUT_CONFIG)))
-    remote_mission = os.path.join(workspace_dir, "config", "missions", os.path.basename(mission_path))
-    remote_artifact_dir = os.path.join(workspace_dir, str(artifact_run.path.relative_to(artifact_run.path.parents[2])))
-
-    remote_command = (
-        "cd '{workspace}' && "
-        "AUTO_SCOUT_SITE_CONFIG='{site}' "
-        "AUTO_SCOUT_CONFIG='{config}' "
-        "python3 src/scout_navigation_controller.py "
-        "--site '{site}' --config '{config}' --mission '{mission}' --artifact-dir '{artifact}'"
-    ).format(
-        workspace=workspace_dir,
-        site=remote_site,
-        config=remote_config,
-        mission=remote_mission,
-        artifact=remote_artifact_dir,
-    )
+    remote_command = _build_smoke_loop_remote_command(companion, mission_path, artifact_run)
     runner.run_remote(companion["ssh"], remote_command)
 
     return {
