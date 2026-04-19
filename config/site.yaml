@@ -14,14 +14,20 @@ roles:
     service_group: "linaro"
     ros:
       distro: "melodic"
-      master_uri: "http://localhost:11311"
+      master_uri: "http://moorebot-scout.local:11311"
+      advertise_host: "moorebot-scout.local"
     devices:
       camera: "/dev/video0"
       lidar: "/dev/ttyUSB0"
     topics:
       camera_compressed: "/camera/image_raw/compressed"
       lidar_scan: "/scan"
+      odom: "/MotorNode/baselink_odom_relative"
+      vendor_cmd_vel: "/cmd_vel_force"
+      autonomy_cmd_vel: "/scout/cmd_vel_companion"
       vendor_dog_detection: "/scout/dog_detection_external"
+    motion:
+      forward_axis: "y"
     adapters:
       motion: "rollereye_or_vendor_bridge"
       camera: "opencv_device"
@@ -31,7 +37,8 @@ roles:
     capabilities:
       camera: true
       scan: true
-      pose: false
+      pose: true
+      motion: true
       dock: false
       notify: false
       vendor_bridge: true
@@ -53,6 +60,8 @@ roles:
       distro: "melodic"
       container_name: "auto-scout-melodic"
       compose_file: "container/docker-compose.yml"
+      master_uri: "http://moorebot-scout.local:11311"
+      advertise_host: "auto-scout-pi5.local"
     capabilities:
       camera: false
       scan: true

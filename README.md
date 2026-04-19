@@ -64,11 +64,11 @@ The supported v1 runtime surface is intentionally headless:
   the main CLI for deploy, validate, and mission runs
 - [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml)
   single inventory for Scout and Raspberry Pi 5 hosts, devices, storage, and declared capabilities
-  keep `pose`, `dock`, and `notify` disabled there until you have verified them on real hardware
+  the shipped sample now reflects one proven rooted Scout, but every real unit should still be probed and compared against hardware
 - [config/missions/smoke_loop.yaml](/Users/markvlcek/Code/auto-scout/config/missions/smoke_loop.yaml)
   canonical proof mission for a real room loop, return, photo capture, and notification
 - `launch/scout_runtime.launch`
-  Scout-side launch for the thin bridge runtime
+  Scout-side launch for the thin bridge runtime, including vendor odometry and motion normalization
 - `launch/companion_runtime.launch`
   companion-side launch for localization or SLAM plus the companion runtime heartbeat
 
@@ -157,11 +157,11 @@ For example:
 Treat the bring-up sequence as:
 
 1. Verify the real Scout surface first:
-   decide whether your rooted unit exposes a usable remote ROS graph, only vendor APIs, or a mix
+   run `./auto-scout probe scout --observe-motion 15` and decide whether your rooted unit exposes a usable remote ROS graph, only vendor APIs, or a mix
 2. Prove scan plus pose:
    until a pose source is declared and tested, neither `move_base` nor Nav2 is the next problem
 3. Start with manual-drive mapping:
-   validate `/scan`, TF, and pose inside the companion container, then save and reload a map
+   validate `/scan`, `/odom`, TF, and pose inside the companion container, then save and reload a map
 4. Add patrol next:
    only after map save/load and localization work
 5. Add dog search last:
@@ -185,8 +185,8 @@ Treat the bring-up sequence as:
 ### Phase 1
 
 - Verify root access and topic or API access on the Scout.
-- Bring up the LD19 and camera bridge.
-- Confirm you can command motion safely.
+- Bring up the LD19, the camera bridge, and the Scout-side odom/motion compatibility bridges.
+- Confirm `./auto-scout probe scout --observe-motion 15` and `./auto-scout probe scout --exercise-cmd-vel` behave as expected.
 
 ### Phase 2
 
@@ -213,6 +213,9 @@ Use the headless CLI for supported deployment, validation, and smoke-mission wor
 # Configure the saved inventory first, or let deploy prompt you interactively
 ./auto-scout configure scout
 ./auto-scout configure companion
+
+# Probe the live Scout ROS surface before trusting the saved inventory
+./auto-scout probe scout --observe-motion 15
 
 # Deploy the thin Scout runtime
 ./auto-scout deploy scout

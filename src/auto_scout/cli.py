@@ -9,15 +9,16 @@ import sys
 from auto_scout.artifacts import ArtifactRun
 from auto_scout.deploy import deploy_companion, deploy_scout
 from auto_scout.install_config import configure_role, prompts_enabled
+from auto_scout.live_probe import apply_probe_suggestions, probe_scout_capabilities
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import run_smoke_loop
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG, repo_root
 from auto_scout.site_config import load_site_config, role_config, write_site_config
 
 
-def _validator_command(role, site_path, config_path):
+def _validator_command(role, site_path, config_path, no_live_probe=False, observe_motion=None, exercise_cmd_vel=False):
     mode = "all" if role == "system" else "runtime"
-    return [
+    command = [
         sys.executable,
         os.path.join(str(repo_root()), "check_scout_compatibility.py"),
         "--mode",
@@ -30,10 +31,24 @@ def _validator_command(role, site_path, config_path):
         config_path,
         "--json",
     ]
+    if no_live_probe:
+        command.append("--no-live-probe")
+    if observe_motion is not None:
+        command.extend(["--observe-motion", str(observe_motion)])
+    if exercise_cmd_vel:
+        command.append("--exercise-cmd-vel")
+    return command
 
 
-def _run_validator(role, site_path, config_path, artifact_run):
-    command = _validator_command(role, site_path, config_path)
+def _run_validator(role, site_path, config_path, artifact_run, no_live_probe=False, observe_motion=None, exercise_cmd_vel=False):
+    command = _validator_command(
+        role,
+        site_path,
+        config_path,
+        no_live_probe=no_live_probe,
+        observe_motion=observe_motion,
+        exercise_cmd_vel=exercise_cmd_vel,
+    )
     artifact_run.log("$ {}".format(" ".join(command)))
     completed = subprocess.run(
         command,
@@ -117,6 +132,45 @@ def build_parser():
 
     validate_parser = subparsers.add_parser("validate", help="Run role-aware validation")
     validate_parser.add_argument("role", choices=["scout", "companion", "system"])
+    validate_parser.add_argument("--no-live-probe", action="store_true", help="Disable live Scout probing")
+    validate_parser.add_argument(
+        "--observe-motion",
+        type=float,
+        default=None,
+        help="Observe odometry for this many seconds while manually driving the Scout",
+    )
+    validate_parser.add_argument(
+        "--exercise-cmd-vel",
+        action="store_true",
+        help="Publish a short command on the vendor motion topic during live Scout probing",
+    )
+
+    probe_parser = subparsers.add_parser("probe", help="Probe the live Scout ROS surface")
+    probe_parser.add_argument("role", choices=["scout"])
+    probe_parser.add_argument(
+        "--observe-motion",
+        type=float,
+        default=15.0,
+        help="Observe odometry for this many seconds while manually driving the Scout",
+    )
+    probe_parser.add_argument(
+        "--exercise-cmd-vel",
+        action="store_true",
+        help="Publish a short command on the vendor motion topic and verify odometry changes",
+    )
+    probe_parser.add_argument(
+        "--write-site",
+        dest="write_site",
+        action="store_true",
+        default=False,
+        help="Write probe suggestions back to the site inventory",
+    )
+    probe_parser.add_argument(
+        "--no-write-site",
+        dest="write_site",
+        action="store_false",
+        help="Do not write probe suggestions back to the site inventory",
+    )
 
     run_parser = subparsers.add_parser("run", help="Run a named mission")
     run_parser.add_argument("mission", choices=["smoke-loop"])
@@ -166,9 +220,36 @@ def main(argv=None):
         return 0
 
     if args.command == "validate":
-        report = _run_validator(args.role, site_path, args.config, artifact_run)
+        report = _run_validator(
+            args.role,
+            site_path,
+            args.config,
+            artifact_run,
+            no_live_probe=args.no_live_probe,
+            observe_motion=args.observe_motion,
+            exercise_cmd_vel=args.exercise_cmd_vel,
+        )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report.get("summary", {}).get("ok", False) else 1
+
+    if args.command == "probe":
+        result = probe_scout_capabilities(
+            site_config,
+            observe_motion_seconds=args.observe_motion,
+            exercise_cmd_vel=args.exercise_cmd_vel,
+            artifact_run=artifact_run,
+        )
+        if args.write_site:
+            updated_site_config = apply_probe_suggestions(site_config, result)
+            write_site_config(updated_site_config, site_path)
+            result["site_path"] = site_path
+            result["write_site"] = True
+        else:
+            result["site_path"] = site_path
+            result["write_site"] = False
+        artifact_run.write_json("probe-report.json", result)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result.get("ok", False) else 1
 
     mission_name = "smoke_loop" if args.mission == "smoke-loop" else args.mission
     mission_config, mission_path = load_mission_config(args.mission_file or mission_name)

@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 
 from auto_scout.mission_config import load_mission_config
-from auto_scout.site_config import load_site_config, system_capabilities
+from auto_scout.site_config import load_site_config, scout_runtime_topic, system_capabilities
 from config_utils import load_scout_config
 
 
@@ -47,7 +47,6 @@ class CompanionMissionController:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.artifact_dir / "mission.log"
 
-        self.topic_config = self.config.get("topics", {})
         self.latest_image = None
         self.latest_pose = None
         self.pose_seen = False
@@ -56,7 +55,7 @@ class CompanionMissionController:
         self.status_pub = rospy.Publisher("/scout/mission_status", String, queue_size=1)
         self.dock_pub = rospy.Publisher("/scout/runtime/request", String, queue_size=1)
         rospy.Subscriber(
-            self.topic_config.get("camera_compressed", "/camera/image_raw/compressed"),
+            scout_runtime_topic(self.site_config, self.config, "camera_compressed", "/camera/image_raw/compressed"),
             CompressedImage,
             self.camera_callback,
             queue_size=1,

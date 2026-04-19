@@ -22,7 +22,8 @@ def _render_scout_service(role_settings):
     service_user, service_group = role_service_identity(role_settings)
     config_path = "{}/config/scout_config.yaml".format(workspace_dir)
     site_path = "{}/config/site.yaml".format(workspace_dir)
-    ros_master_uri = role_settings.get("ros", {}).get("master_uri", "http://localhost:11311")
+    ros_master_uri = role_settings.get("ros", {}).get("master_uri", "http://moorebot-scout.local:11311")
+    advertise_host = role_settings.get("ros", {}).get("advertise_host", "localhost")
 
     return """[Unit]
 Description=Auto-Scout scout runtime
@@ -38,7 +39,7 @@ Environment=AUTO_SCOUT_WORKSPACE={workspace_dir}
 Environment=AUTO_SCOUT_CONFIG={config_path}
 Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
 Environment=ROS_MASTER_URI={ros_master_uri}
-Environment=ROS_HOSTNAME=localhost
+Environment=ROS_HOSTNAME={advertise_host}
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5
@@ -54,6 +55,7 @@ WantedBy=multi-user.target
         config_path=config_path,
         site_path=site_path,
         ros_master_uri=ros_master_uri,
+        advertise_host=advertise_host,
     )
 
 
@@ -61,6 +63,9 @@ def _render_companion_service(role_settings):
     workspace_dir = role_settings["workspace_dir"]
     service_user, service_group = role_service_identity(role_settings)
     storage_root = companion_storage_root(role_settings)
+    ros_settings = role_settings.get("ros", {})
+    ros_master_uri = ros_settings.get("master_uri", "http://moorebot-scout.local:11311")
+    advertise_host = ros_settings.get("advertise_host", "auto-scout-pi5.local")
 
     return """[Unit]
 Description=Auto-Scout companion runtime
@@ -77,6 +82,8 @@ Environment=AUTO_SCOUT_WORKSPACE={workspace_dir}
 Environment=AUTO_SCOUT_STORAGE_ROOT={storage_root}
 Environment=AUTO_SCOUT_CONFIG={workspace_dir}/config/scout_config.yaml
 Environment=AUTO_SCOUT_SITE_CONFIG={workspace_dir}/config/site.yaml
+Environment=AUTO_SCOUT_ROS_MASTER_URI={ros_master_uri}
+Environment=AUTO_SCOUT_ROS_HOSTNAME={advertise_host}
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh up'
 ExecStop=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh down'
 TimeoutStartSec=0
@@ -88,6 +95,8 @@ WantedBy=multi-user.target
         service_group=service_group,
         workspace_dir=workspace_dir,
         storage_root=storage_root,
+        ros_master_uri=ros_master_uri,
+        advertise_host=advertise_host,
     )
 
 

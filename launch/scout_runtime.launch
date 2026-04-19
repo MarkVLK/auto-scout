@@ -10,8 +10,15 @@
 
   <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen">
     <param name="config_file" value="$(arg config_file)" />
+    <param name="site_file" value="$(arg site_file)" />
   </node>
 
   <node name="scout_camera_driver" pkg="auto-scout" type="scout_camera_driver.py"
-        args="--config $(arg config_file)" output="screen" />
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+  <node name="scout_odom_bridge" pkg="auto-scout" type="scout_odom_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+  <node name="scout_motion_bridge" pkg="auto-scout" type="scout_motion_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 </launch>

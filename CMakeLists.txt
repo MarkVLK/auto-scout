@@ -75,6 +75,8 @@ catkin_install_python(PROGRAMS
   src/companion_runtime_agent.py
   src/ld19_lidar_driver.py
   src/scout_camera_driver.py
+  src/scout_motion_bridge.py
+  src/scout_odom_bridge.py
   src/dog_detection_module.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

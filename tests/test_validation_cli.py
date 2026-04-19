@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from auto_scout.yaml_loader import load_yaml
+from auto_scout.yaml_loader import write_yaml
 
 
 def run_validator(*args):
@@ -165,13 +166,29 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["port"], 2200)
         self.assertEqual(site_config["roles"]["companion"]["storage"]["events_dir"], "/var/lib/auto-scout/events")
 
-    def test_runtime_mode_reports_pose_gate_failure_on_default_site(self):
-        result = run_validator("--mode", "runtime", "--role", "system", "--json")
+    def test_runtime_mode_reports_pose_gate_pass_on_default_site(self):
+        result = run_validator("--mode", "runtime", "--role", "system", "--json", "--no-live-probe")
 
         self.assertEqual(result.returncode, 1, msg=result.stdout + result.stderr)
         report = json.loads(result.stdout)
         pose_gate = next(item for item in report["checks"] if item["name"] == "runtime.pose_gate")
 
+        self.assertEqual(pose_gate["status"], "pass")
+        self.assertIn("Declared pose provider", pose_gate["details"][0])
+
+    def test_runtime_mode_reports_pose_gate_failure_on_unverified_site_fixture(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            site_config = load_yaml(REPO_ROOT / "config" / "site.yaml")
+            site_config["roles"]["scout"]["capabilities"]["pose"] = False
+            site_config["roles"]["scout"]["capabilities"]["motion"] = False
+            site_config["roles"]["companion"]["capabilities"]["pose"] = False
+            write_yaml(site_path, site_config)
+            result = run_validator("--mode", "runtime", "--role", "system", "--json", "--site", str(site_path), "--no-live-probe")
+
+        self.assertEqual(result.returncode, 1, msg=result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        pose_gate = next(item for item in report["checks"] if item["name"] == "runtime.pose_gate")
         self.assertEqual(pose_gate["status"], "fail")
         self.assertIn("Pose remains", pose_gate["summary"])
 
@@ -191,7 +208,6 @@ class ValidationCliTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["phase"], "preflight")
-        self.assertTrue(any("pose" in issue for issue in payload["issues"]))
         self.assertTrue(any("notify" in issue for issue in payload["issues"]))
 
 

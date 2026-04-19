@@ -18,25 +18,28 @@ class DogDetectionModule:
         except ImportError as exc:
             raise SystemExit("Dog detection bridge requires ROS Python packages: {}".format(exc))
 
+        from auto_scout.site_config import load_site_config, scout_runtime_topic
+
         self.rospy = rospy
         self.String = String
+        rospy.init_node("dog_detection_module", anonymous=False)
+        site_path = rospy.get_param("~site_file", None)
         self.config, self.config_path = load_scout_config(config_path)
+        self.site_config, self.site_path = load_site_config(site_path)
         self.current_room = "unknown"
         self.detection_active = False
         self.last_detection = None
 
-        topic_config = self.config.get("topics", {})
         dog_config = self.config.get("dog_search", {})
         storage_config = self.config.get("storage", {})
 
         self.external_topic = dog_config.get(
             "external_detection_topic",
-            topic_config.get("external_dog_detection", "/scout/dog_detection_external"),
+            scout_runtime_topic(self.site_config, self.config, "vendor_dog_detection", "/scout/dog_detection_external"),
         )
         self.event_dir = Path(storage_config.get("companion_event_dir", "/srv/auto-scout/events"))
         self.event_dir.mkdir(parents=True, exist_ok=True)
 
-        rospy.init_node("dog_detection_module", anonymous=False)
         self.publisher = rospy.Publisher("/scout/dog_detection", String, queue_size=1)
         self.subscriber = rospy.Subscriber(self.external_topic, String, self.external_detection_callback, queue_size=1)
 

@@ -6,6 +6,7 @@ preconditions:
     - "camera"
     - "scan"
     - "pose"
+    - "motion"
 
 route:
   map_frame: "map"

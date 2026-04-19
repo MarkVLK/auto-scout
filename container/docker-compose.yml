@@ -20,8 +20,8 @@ services:
       # The supported v1 path treats the companion container as the autonomy
       # boundary. Do not replace this with a ros1_bridge/Jazzy boundary unless
       # the documented architecture is intentionally being changed.
-      ROS_MASTER_URI: http://localhost:11311
-      ROS_HOSTNAME: localhost
+      ROS_MASTER_URI: ${AUTO_SCOUT_ROS_MASTER_URI}
+      ROS_HOSTNAME: ${AUTO_SCOUT_ROS_HOSTNAME}
     command:
       - /bin/bash
       - -lc

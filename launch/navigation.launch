@@ -10,6 +10,7 @@
   -->
 
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml"/>
+  <arg name="autonomy_cmd_vel" default="/scout/cmd_vel_companion"/>
 
   <!-- Load a previously saved occupancy grid -->
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
@@ -51,6 +52,7 @@
 
   <!-- Path planning -->
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <remap from="cmd_vel" to="$(arg autonomy_cmd_vel)"/>
     <rosparam file="$(find auto-scout)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
     <rosparam file="$(find auto-scout)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find auto-scout)/config/local_costmap_params.yaml" command="load"/>

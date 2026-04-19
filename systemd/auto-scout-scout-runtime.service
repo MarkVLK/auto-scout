@@ -12,8 +12,8 @@ Group=linaro
 WorkingDirectory=/home/linaro/catkin_ws/src/auto-scout
 Environment=AUTO_SCOUT_CONFIG=/home/linaro/catkin_ws/src/auto-scout/config/scout_config.yaml
 Environment=AUTO_SCOUT_SITE_CONFIG=/home/linaro/catkin_ws/src/auto-scout/config/site.yaml
-Environment=ROS_MASTER_URI=http://localhost:11311
-Environment=ROS_HOSTNAME=localhost
+Environment=ROS_MASTER_URI=http://moorebot-scout.local:11311
+Environment=ROS_HOSTNAME=moorebot-scout.local
 ExecStart=/bin/bash -lc '/home/linaro/catkin_ws/src/auto-scout/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5

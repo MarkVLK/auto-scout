@@ -16,17 +16,23 @@ class LD19LidarDriver:
     """
     
     def __init__(self):
+        from auto_scout.site_config import load_site_config, scout_runtime_device, scout_runtime_topic
+
         rospy.init_node('ld19_lidar_driver', anonymous=True)
 
         config_path = rospy.get_param('~config_file', None)
+        site_path = rospy.get_param('~site_file', None)
         self.config, self.config_path = load_scout_config(config_path)
+        self.site_config, self.site_path = load_site_config(site_path)
         if not isinstance(self.config, dict):
             self.config = {}
 
         lidar_config = self.config.get('lidar', {})
-        topic_config = self.config.get('topics', {})
 
-        self.port = rospy.get_param('~port', lidar_config.get('port', '/dev/ttyUSB0'))
+        self.port = rospy.get_param(
+            '~port',
+            scout_runtime_device(self.site_config, self.config, 'lidar', lidar_config.get('port', '/dev/ttyUSB0')),
+        )
         self.baudrate = rospy.get_param('~baudrate', lidar_config.get('baudrate', 230400))
         self.frame_id = rospy.get_param('~frame_id', lidar_config.get('frame_id', 'base_laser'))
         self.angle_min = rospy.get_param('~angle_min', lidar_config.get('angle_min', 0.0))
@@ -34,7 +40,10 @@ class LD19LidarDriver:
         self.range_min = rospy.get_param('~range_min', lidar_config.get('range_min', 0.02))
         self.range_max = rospy.get_param('~range_max', lidar_config.get('range_max', 12.0))
         self.invert_scan = rospy.get_param('~invert_scan', lidar_config.get('invert_scan', False))
-        self.scan_topic = rospy.get_param('~scan_topic', topic_config.get('lidar_scan', '/scan'))
+        self.scan_topic = rospy.get_param(
+            '~scan_topic',
+            scout_runtime_topic(self.site_config, self.config, 'lidar_scan', '/scan'),
+        )
 
         self.scan_pub = rospy.Publisher(self.scan_topic, LaserScan, queue_size=1)
         

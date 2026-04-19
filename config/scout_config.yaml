@@ -26,9 +26,13 @@ storage:
 topics:
   lidar_scan: "/scan"
   camera_compressed: "/camera/image_raw/compressed"
+  odom: "/MotorNode/baselink_odom_relative"
+  vendor_cmd_vel: "/cmd_vel_force"
+  autonomy_cmd_vel: "/scout/cmd_vel_companion"
   scout_video_stream: "/CoreNode/h264"
   scout_imu: "/SensorNode/imu"
   scout_tof: "/SensorNode/tof"
+  vendor_dog_detection: "/scout/dog_detection_external"
   external_dog_detection: "/scout/dog_detection_external"
 
 waypoints:

@@ -13,6 +13,15 @@ DEFAULT_SCOUT_SSH_HOST = "moorebot-scout.local"
 DEFAULT_COMPANION_SSH_HOST = "auto-scout-pi5.local"
 DEFAULT_COMPANION_STORAGE_ROOT = "/srv/auto-scout"
 
+SCOUT_TOPIC_FALLBACKS = {
+    "lidar_scan": "lidar_scan",
+    "camera_compressed": "camera_compressed",
+    "vendor_dog_detection": "external_dog_detection",
+    "odom": "odom",
+    "vendor_cmd_vel": "vendor_cmd_vel",
+    "autonomy_cmd_vel": "autonomy_cmd_vel",
+}
+
 
 def current_username():
     """Return the current OS username or a conservative fallback."""
@@ -90,7 +99,8 @@ def default_site_config():
                 "service_group": scout_user,
                 "ros": {
                     "distro": "melodic",
-                    "master_uri": "http://localhost:11311",
+                    "master_uri": "http://{}:11311".format(DEFAULT_SCOUT_SSH_HOST),
+                    "advertise_host": DEFAULT_SCOUT_SSH_HOST,
                 },
                 "devices": {
                     "camera": "/dev/video0",
@@ -99,7 +109,13 @@ def default_site_config():
                 "topics": {
                     "camera_compressed": "/camera/image_raw/compressed",
                     "lidar_scan": "/scan",
+                    "odom": "/MotorNode/baselink_odom_relative",
+                    "vendor_cmd_vel": "/cmd_vel_force",
+                    "autonomy_cmd_vel": "/scout/cmd_vel_companion",
                     "vendor_dog_detection": "/scout/dog_detection_external",
+                },
+                "motion": {
+                    "forward_axis": "y",
                 },
                 "adapters": {
                     "motion": "rollereye_or_vendor_bridge",
@@ -111,7 +127,8 @@ def default_site_config():
                 "capabilities": {
                     "camera": True,
                     "scan": True,
-                    "pose": False,
+                    "pose": True,
+                    "motion": True,
                     "dock": False,
                     "notify": False,
                     "vendor_bridge": True,
@@ -138,6 +155,8 @@ def default_site_config():
                     "distro": "melodic",
                     "container_name": "auto-scout-melodic",
                     "compose_file": "container/docker-compose.yml",
+                    "master_uri": "http://{}:11311".format(DEFAULT_SCOUT_SSH_HOST),
+                    "advertise_host": DEFAULT_COMPANION_SSH_HOST,
                 },
                 "capabilities": {
                     "camera": False,
@@ -189,6 +208,55 @@ def role_config(site_config, role):
         return site_config["roles"][role]
     except KeyError as exc:
         raise KeyError("Unknown role '{}'".format(role)) from exc
+
+
+def role_topic(role_settings, name, default=None):
+    """Return a role topic setting."""
+    return role_settings.get("topics", {}).get(name, default)
+
+
+def role_device(role_settings, name, default=None):
+    """Return a role device setting."""
+    return role_settings.get("devices", {}).get(name, default)
+
+
+def role_motion_setting(role_settings, name, default=None):
+    """Return a role motion setting."""
+    return role_settings.get("motion", {}).get(name, default)
+
+
+def role_ros_setting(role_settings, name, default=None):
+    """Return a role ROS setting."""
+    return role_settings.get("ros", {}).get(name, default)
+
+
+def scout_runtime_topic(site_config, project_config, name, default=None):
+    """Return the canonical Scout runtime topic with legacy fallbacks."""
+    scout = role_config(site_config, "scout")
+    if name in scout.get("topics", {}):
+        return scout["topics"][name]
+
+    fallback_key = SCOUT_TOPIC_FALLBACKS.get(name, name)
+    return project_config.get("topics", {}).get(fallback_key, default)
+
+
+def scout_runtime_device(site_config, project_config, name, default=None):
+    """Return the canonical Scout runtime device with legacy fallbacks."""
+    scout = role_config(site_config, "scout")
+    if name in scout.get("devices", {}):
+        return scout["devices"][name]
+
+    if name == "camera":
+        return project_config.get("camera", {}).get("device", default)
+    if name == "lidar":
+        return project_config.get("lidar", {}).get("port", default)
+    return default
+
+
+def scout_motion_axis(site_config, default="y"):
+    """Return the configured Scout forward axis."""
+    scout = role_config(site_config, "scout")
+    return role_motion_setting(scout, "forward_axis", default)
 
 
 def role_service_identity(role_settings):

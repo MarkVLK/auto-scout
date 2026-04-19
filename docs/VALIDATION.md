@@ -43,19 +43,39 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 - whether the host looks like a Scout endpoint or a companion computer
 - role declarations in `config/site.yaml`
 - companion storage directories and container stack expectations
-- Scout bridge, camera, and scan capability declarations
-- whether pose is still the gating missing capability for mapping and patrol
+- Scout bridge, motion, camera, and scan capability declarations
+- whether live Scout probing matches the declared vendor topics, ROS networking, and capabilities
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
 
 ## What Failure Means Right Now
 
-On the default repo inventory, `./auto-scout validate system` is expected to fail until you prove pose, docking, and notification capabilities on real hardware. That is intentional.
+The default repo inventory now reflects one proven rooted Scout for pose and motion, but `./auto-scout probe scout --observe-motion 15` remains the authoritative check before you trust the saved inventory on any real unit.
 
 The most important runtime gate is pose:
 
 - if `roles.scout.capabilities.pose` and `roles.companion.capabilities.pose` are both false, treat that as the primary blocker
 - do not switch to Nav2, SLAM Toolbox, or a `ros1_bridge` design while that gate is still failing
+
+The most important runtime sanity check after that is live mismatch detection:
+
+- if live probe contradicts `roles.scout.capabilities.pose`, `roles.scout.capabilities.motion`, `roles.scout.topics.odom`, or `roles.scout.topics.vendor_cmd_vel`, treat that as a real integration failure
+- if the cross-host ROS settings still advertise `localhost`, treat that as a deployment bug rather than a hardware limitation
+
+## Probe Workflow
+
+Use probe before deploy or full validation when you have Scout access:
+
+```bash
+./auto-scout probe scout --observe-motion 15
+./auto-scout probe scout --exercise-cmd-vel
+```
+
+Use `--write-site` only when you want to apply the generated site-inventory suggestions automatically:
+
+```bash
+./auto-scout probe scout --observe-motion 15 --write-site
+```
 
 ## Regression Test
 

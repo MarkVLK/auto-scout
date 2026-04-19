@@ -19,6 +19,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from auto_scout.mission_config import load_mission_config
+from auto_scout.live_probe import probe_scout_capabilities
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
 from auto_scout.site_config import load_site_config, role_config
 from auto_scout.yaml_loader import load_yaml
@@ -263,7 +264,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
     if not route:
         mission_issues.append("smoke_loop mission is missing route.loop_waypoints")
     required_capabilities = smoke_mission.get("preconditions", {}).get("required_capabilities", [])
-    for item in ["camera", "scan", "pose"]:
+    for item in ["camera", "scan", "pose", "motion"]:
         if item not in required_capabilities:
             mission_issues.append("smoke_loop mission must require '{}'".format(item))
     if not smoke_mission.get("return", {}).get("fallback_waypoint"):
@@ -293,7 +294,13 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
 
     launch_issues = []
     expected_nodes = {
-        "launch/scout_runtime.launch": ["scout_runtime_agent", "ld19_lidar_driver", "scout_camera_driver"],
+        "launch/scout_runtime.launch": [
+            "scout_runtime_agent",
+            "ld19_lidar_driver",
+            "scout_camera_driver",
+            "scout_motion_bridge",
+            "scout_odom_bridge",
+        ],
         "launch/companion_runtime.launch": ["companion_runtime_agent"],
         "launch/navigation.launch": ["map_server", "amcl", "move_base"],
         "launch/slam_mapping.launch": ["robot_state_publisher", "slam_gmapping"],
@@ -380,6 +387,10 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                 container_issues.append(
                     "companion-runtime must expose AUTO_SCOUT_SITE_CONFIG for the repo-local site inventory"
                 )
+            elif env.get("ROS_MASTER_URI") != "${AUTO_SCOUT_ROS_MASTER_URI}":
+                container_issues.append("companion-runtime must source ROS_MASTER_URI from AUTO_SCOUT_ROS_MASTER_URI")
+            elif env.get("ROS_HOSTNAME") != "${AUTO_SCOUT_ROS_HOSTNAME}":
+                container_issues.append("companion-runtime must source ROS_HOSTNAME from AUTO_SCOUT_ROS_HOSTNAME")
 
         if "roslaunch auto-scout companion_runtime.launch" not in compose_text:
             container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
@@ -568,10 +579,99 @@ def _add_site_role_checks(report, site_config, site_path, effective_role):
         )
 
 
+def _probe_mismatch_items(probe_result, prefixes):
+    suggestions = probe_result.get("config_mismatch_suggestions", [])
+    return [item for item in suggestions if any(item.get("path", "").startswith(prefix) for prefix in prefixes)]
+
+
+def _add_live_probe_check(report, site_config, effective_role, runtime_profile, observe_motion, exercise_cmd_vel, live_probe_enabled):
+    if effective_role not in ["scout", "system"]:
+        report.add(
+            "runtime.live_probe",
+            "skip",
+            "Live Scout probing is not required for the selected role",
+        )
+        return
+
+    if not live_probe_enabled:
+        report.add(
+            "runtime.live_probe",
+            "skip",
+            "Live Scout probing is disabled",
+        )
+        return
+
+    force_remote = runtime_profile != "likely_scout"
+    probe_result = probe_scout_capabilities(
+        site_config,
+        observe_motion_seconds=observe_motion,
+        exercise_cmd_vel=exercise_cmd_vel,
+        force_remote=force_remote,
+    )
+    if not probe_result.get("ok", False):
+        report.add(
+            "runtime.live_probe",
+            "warn",
+            "Live Scout probe was unavailable; falling back to declarative validation",
+            details=probe_result.get("errors", []),
+            evidence={"probe": probe_result},
+        )
+        return
+
+    mismatch_items = _probe_mismatch_items(
+        probe_result,
+        [
+            "roles.scout.capabilities.pose",
+            "roles.scout.capabilities.motion",
+            "roles.scout.topics.odom",
+            "roles.scout.topics.vendor_cmd_vel",
+            "roles.scout.ros.master_uri",
+            "roles.scout.ros.advertise_host",
+        ],
+    )
+    details = []
+    observed_motion = probe_result.get("observed", {}).get("motion_observation")
+    if observe_motion and observed_motion and not observed_motion.get("moved", False):
+        details.append("Observed odometry did not change during the motion observation window.")
+    elif observe_motion and observed_motion:
+        details.append("Observed odometry changed during the motion observation window.")
+    elif not observe_motion:
+        details.append("Pose was not dynamically confirmed; rerun with --observe-motion to verify movement.")
+
+    if exercise_cmd_vel and not probe_result.get("observed", {}).get("command_exercise", {}).get("moved", False):
+        details.append("Vendor command exercise did not produce observable motion.")
+    elif exercise_cmd_vel:
+        details.append("Vendor command exercise produced observable motion.")
+
+    if mismatch_items:
+        details.extend(
+            "{} -> {} ({})".format(item["path"], item.get("suggested"), item.get("reason"))
+            for item in mismatch_items
+        )
+        report.add(
+            "runtime.live_probe",
+            "fail",
+            "Live Scout probe contradicts the declared Scout interface or capabilities",
+            details=details,
+            evidence={"probe": probe_result},
+        )
+        return
+
+    report.add(
+        "runtime.live_probe",
+        "pass" if observe_motion else "warn",
+        "Live Scout probe matched the declared Scout interface" if observe_motion else "Live Scout probe matched configured topics, but pose was not dynamically confirmed",
+        details=details,
+        evidence={"probe": probe_result},
+    )
+
+
 def _add_scout_checks(report, site_config, runtime_profile):
     scout = role_config(site_config, "scout")
     capabilities = scout.get("capabilities", {})
     devices = scout.get("devices", {})
+    topics = scout.get("topics", {})
+    ros_settings = scout.get("ros", {})
 
     issues = []
     if not capabilities.get("vendor_bridge", False):
@@ -580,13 +680,20 @@ def _add_scout_checks(report, site_config, runtime_profile):
         issues.append("scout.capabilities.camera must be true")
     if not capabilities.get("scan", False):
         issues.append("scout.capabilities.scan must be true")
+    if not capabilities.get("motion", False):
+        issues.append("scout.capabilities.motion must be true")
 
     for name in ["camera", "lidar"]:
         if name not in devices:
             issues.append("scout.devices.{} is missing".format(name))
+    for name in ["odom", "vendor_cmd_vel", "autonomy_cmd_vel"]:
+        if name not in topics:
+            issues.append("scout.topics.{} is missing".format(name))
+    if not ros_settings.get("advertise_host"):
+        issues.append("scout.ros.advertise_host is missing")
 
     status = "fail" if issues else "pass"
-    summary = "Scout inventory declares the required bridge, camera, and scan capabilities"
+    summary = "Scout inventory declares the required bridge, motion, camera, and scan capabilities"
     details = issues
 
     if not issues and runtime_profile == "likely_scout":
@@ -611,6 +718,8 @@ def _add_scout_checks(report, site_config, runtime_profile):
         evidence={
             "devices": devices,
             "capabilities": capabilities,
+            "topics": topics,
+            "ros": ros_settings,
         },
     )
 
@@ -634,6 +743,12 @@ def _add_companion_checks(report, site_config, runtime_profile):
         compose_path = REPO_ROOT / compose_file
         if not compose_path.is_file():
             issues.append("compose file is missing: {}".format(compose_path))
+    if not ros_settings.get("master_uri"):
+        issues.append("companion.ros.master_uri is missing")
+    if not ros_settings.get("advertise_host"):
+        issues.append("companion.ros.advertise_host is missing")
+    if ros_settings.get("master_uri", "").startswith("http://localhost"):
+        issues.append("companion.ros.master_uri must not point to localhost in the cross-host topology")
 
     status = "fail" if issues else "pass"
     summary = "Companion inventory declares containerized ROS and primary storage"
@@ -665,14 +780,10 @@ def _add_companion_checks(report, site_config, runtime_profile):
 
 
 def _add_pose_gate_check(report, site_config):
-    scout = role_config(site_config, "scout")
-    companion = role_config(site_config, "companion")
-
     declared_sources = []
-    if scout.get("capabilities", {}).get("pose", False):
-        declared_sources.append("scout")
-    if companion.get("capabilities", {}).get("pose", False):
-        declared_sources.append("companion")
+    for role_name in ["scout", "companion"]:
+        if role_config(site_config, role_name).get("capabilities", {}).get("pose", False):
+            declared_sources.append(role_name)
 
     if declared_sources:
         report.add(
@@ -718,20 +829,25 @@ def _add_mission_checks(report, site_config):
     gate = evaluate_smoke_loop_gate(site_config, smoke_mission)
 
     mapping_issues = []
-    scout = role_config(site_config, "scout")
+    system_caps = {
+        name: gate["capabilities"].get(name, False)
+        for name in ["scan", "pose", "motion", "camera"]
+    }
     companion = role_config(site_config, "companion")
-    if not scout.get("capabilities", {}).get("scan", False):
+    if not system_caps.get("scan", False):
         mapping_issues.append("Scout scan capability is disabled")
-    if not companion.get("capabilities", {}).get("pose", False):
-        mapping_issues.append("Companion pose capability is disabled")
+    if not system_caps.get("pose", False):
+        mapping_issues.append("System pose capability is disabled")
     if not companion.get("storage", {}).get("maps_dir"):
         mapping_issues.append("Companion maps_dir is missing")
 
     patrol_issues = []
-    if not companion.get("capabilities", {}).get("pose", False):
+    if not system_caps.get("pose", False):
         patrol_issues.append("Pose capability is required for localization and patrol")
-    if not scout.get("capabilities", {}).get("camera", False):
+    if not system_caps.get("camera", False):
         patrol_issues.append("Camera capability is required for patrol proof capture")
+    if not system_caps.get("motion", False):
+        patrol_issues.append("Motion capability is required for autonomous patrol")
 
     if mapping_issues:
         report.add(
@@ -779,7 +895,7 @@ def _add_mission_checks(report, site_config):
     )
 
 
-def add_runtime_checks(report, site_config, site_path, effective_role, runtime_profile):
+def add_runtime_checks(report, site_config, site_path, effective_role, runtime_profile, live_probe_enabled=True, observe_motion=0.0, exercise_cmd_vel=False):
     """Validate local/runtime readiness for the selected role."""
     _add_identity_check(report, effective_role, runtime_profile)
     _add_site_role_checks(report, site_config, site_path, effective_role)
@@ -791,6 +907,15 @@ def add_runtime_checks(report, site_config, site_path, effective_role, runtime_p
     if effective_role in ["companion", "system"]:
         _add_companion_checks(report, site_config, runtime_profile)
 
+    _add_live_probe_check(
+        report,
+        site_config,
+        effective_role,
+        runtime_profile,
+        observe_motion,
+        exercise_cmd_vel,
+        live_probe_enabled,
+    )
     _add_pose_gate_check(report, site_config)
     _add_mission_checks(report, site_config)
 
@@ -801,6 +926,9 @@ def build_parser():
     parser.add_argument("--role", choices=["auto", "scout", "companion", "system"], default="auto")
     parser.add_argument("--site", default=str(REPO_ROOT / "config" / "site.yaml"))
     parser.add_argument("--config", default=str(REPO_ROOT / "config" / "scout_config.yaml"))
+    parser.add_argument("--no-live-probe", action="store_true", help="Disable live Scout probing")
+    parser.add_argument("--observe-motion", type=float, default=0.0, help="Observe odometry while manually driving the Scout")
+    parser.add_argument("--exercise-cmd-vel", action="store_true", help="Publish a short command on the vendor motion topic during probing")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     parser.add_argument("--json-out", default=None, help="Write JSON report to a file")
     return parser
@@ -819,7 +947,16 @@ def main(argv=None):
         add_repo_checks(report, site_config, site_path, project_config, config_path)
 
     if args.mode in ["runtime", "all"]:
-        add_runtime_checks(report, site_config, site_path, effective_role, runtime_profile)
+        add_runtime_checks(
+            report,
+            site_config,
+            site_path,
+            effective_role,
+            runtime_profile,
+            live_probe_enabled=not args.no_live_probe,
+            observe_motion=args.observe_motion,
+            exercise_cmd_vel=args.exercise_cmd_vel,
+        )
 
     payload = report.build()
     if args.json_out:

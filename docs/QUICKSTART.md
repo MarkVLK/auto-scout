@@ -18,17 +18,19 @@ In an interactive shell, `configure` and `deploy` now prompt for missing install
 Start with the role-aware validator from this repo:
 
 ```bash
+./auto-scout probe scout --observe-motion 15
 ./auto-scout validate scout
 ./auto-scout validate companion
 ./auto-scout validate system
 ```
 
-Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml) reflects what is actually proven on your Scout and Raspberry Pi 5, especially `pose`, `dock`, and `notify`.
+Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml) reflects what is actually proven on your Scout and Raspberry Pi 5. The shipped sample matches one proven rooted Scout, but live probe results still win.
 
 Pay attention to:
 
 - whether `config/site.yaml` matches the real Scout and Raspberry Pi 5 targets
-- whether pose, notify, and dock capabilities are declared correctly
+- whether pose, motion, notify, and dock capabilities are declared correctly
+- whether the Scout probe found the expected vendor odometry and motion topics
 - whether mapping, patrol, and smoke-loop readiness are reported as `PASS`, `WARN`, or `FAIL`
 
 If you only want to validate the repo wiring without probing the current machine, use:
@@ -44,7 +46,8 @@ Before touching autonomy:
 - confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
 - confirm the camera or video bridge works
 - confirm the LD19 publishes `/scan`
-- confirm you have a usable pose or odometry source
+- confirm you have a usable pose or odometry source by running `./auto-scout probe scout --observe-motion 15`
+- confirm the Scout-side compatibility bridges expose standard `/odom` and `/scout/cmd_vel_companion`
 
 If pose is missing, stop here. `slam_gmapping` and `move_base` will not behave well without it.
 Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is still unproven.
@@ -56,6 +59,7 @@ Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is
 ./auto-scout configure companion
 ./auto-scout deploy scout
 ./auto-scout deploy companion
+./auto-scout validate system --observe-motion 15
 roslaunch auto-scout slam_mapping.launch
 ```
 
