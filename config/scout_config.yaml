@@ -15,8 +15,8 @@ platform:
 storage:
   # Official Moorebot sources disagree on raw flash size and the FAQ says only
   # roughly 2 to 3 GB is user-accessible, so treat Scout storage as temporary.
-  scout_media_cache_dir: "/home/linaro/scout_media_cache"
-  scout_map_cache_dir: "/home/linaro/scout_map_cache"
+  scout_media_cache_dir: "/var/tmp/auto-scout/scout_media_cache"
+  scout_map_cache_dir: "/var/tmp/auto-scout/scout_map_cache"
   primary_store: "companion"
   companion_map_dir: "/srv/auto-scout/maps"
   companion_media_dir: "/srv/auto-scout/media"

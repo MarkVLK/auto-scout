@@ -2,6 +2,7 @@
 """Helpers for locating and loading reset-era configuration files."""
 
 import os
+from pathlib import Path
 
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG
 from auto_scout.site_config import load_site_config
@@ -10,11 +11,13 @@ from auto_scout.yaml_loader import load_yaml
 
 def candidate_config_paths(explicit_path=None):
     """Return config candidates in most-specific to least-specific order."""
+    home_dir = str(Path.home())
     candidates = [
         explicit_path,
         os.environ.get("AUTO_SCOUT_CONFIG"),
         str(DEFAULT_SCOUT_CONFIG),
-        "/home/linaro/catkin_ws/src/auto-scout/config/scout_config.yaml",
+        os.path.join(home_dir, "auto-scout", "config", "scout_config.yaml"),
+        os.path.join(home_dir, "catkin_ws", "src", "auto-scout", "config", "scout_config.yaml"),
         "/opt/auto-scout/config/scout_config.yaml",
     ]
 

@@ -1,6 +1,9 @@
 FROM ubuntu:18.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Keep the autonomy stack in a Melodic-era userspace even when the Pi host runs
+# Ubuntu 24.04. This avoids turning ros1_bridge or mixed ROS2 distros into the
+# default integration boundary before pose and Scout-side interfaces are proven.
 ENV ROS_DISTRO=melodic
 ENV CATKIN_WS=/opt/catkin_ws
 

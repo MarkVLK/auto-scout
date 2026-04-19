@@ -3,10 +3,17 @@
 This quick start is for the realistic target architecture:
 
 - Scout runs lightweight bridge or capture code
-- companion computer runs ROS1 SLAM, navigation, storage, and notifications
+- companion computer runs one host-networked ROS1 companion container for SLAM, navigation, storage, and notifications
 - the supported operator surface is the headless `auto-scout` CLI
 
 ## 1. Confirm The Platform
+
+Before you deploy, either:
+
+- run `./auto-scout configure scout` and `./auto-scout configure companion`, or
+- pass the install values directly on `deploy` with flags such as `--ssh-user`, `--workspace-dir`, and `--storage-root`
+
+In an interactive shell, `configure` and `deploy` now prompt for missing install values so you can accept sane defaults or replace them without editing YAML manually.
 
 Start with the role-aware validator from this repo:
 
@@ -16,7 +23,7 @@ Start with the role-aware validator from this repo:
 ./auto-scout validate system
 ```
 
-Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, update [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml) so `pose`, `dock`, and `notify` reflect what is actually proven on your Scout and Raspberry Pi 5.
+Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure [config/site.yaml](/Users/markvlcek/Code/auto-scout/config/site.yaml) reflects what is actually proven on your Scout and Raspberry Pi 5, especially `pose`, `dock`, and `notify`.
 
 Pay attention to:
 
@@ -34,15 +41,19 @@ python3 check_scout_compatibility.py --mode repo
 
 Before touching autonomy:
 
+- confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
 - confirm the camera or video bridge works
 - confirm the LD19 publishes `/scan`
 - confirm you have a usable pose or odometry source
 
 If pose is missing, stop here. `slam_gmapping` and `move_base` will not behave well without it.
+Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is still unproven.
 
 ## 3. Start Mapping On The Companion
 
 ```bash
+./auto-scout configure scout
+./auto-scout configure companion
 ./auto-scout deploy scout
 ./auto-scout deploy companion
 roslaunch auto-scout slam_mapping.launch
@@ -100,6 +111,8 @@ Recommended dog-search flow:
 Do not assume any of these are true without proving them on your unit:
 
 - ROS Noetic on the Scout
+- `ros1_bridge` on Ubuntu 24.04 as the supported first integration path
+- mixed ROS 2 distro communication as a stable system boundary
 - enough local Scout storage for long-term map and video retention
 - onboard PyTorch inference
 - fully documented public `/odom` or `move_base` interfaces from stock Moorebot firmware

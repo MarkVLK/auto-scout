@@ -32,6 +32,7 @@ README_REQUIRED_STRINGS = [
     "auto-scout",
     "scout-runtime",
     "companion-runtime",
+    "ros1_bridge",
 ]
 
 ACTIVE_RUNTIME_STRINGS = {
@@ -351,6 +352,66 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "Service and container files exist for both runtime roles",
         )
 
+    container_issues = []
+    compose_path = REPO_ROOT / "container" / "docker-compose.yml"
+    dockerfile_path = REPO_ROOT / "container" / "Dockerfile"
+    compose_text = compose_path.read_text(encoding="utf-8") if compose_path.is_file() else ""
+    if compose_path.is_file():
+        compose_config = load_yaml(compose_path)
+        services = compose_config.get("services", {}) if isinstance(compose_config, dict) else {}
+        if set(services.keys()) != {"companion-runtime"}:
+            container_issues.append(
+                "container/docker-compose.yml must define only the companion-runtime service"
+            )
+
+        service = services.get("companion-runtime", {})
+        if not isinstance(service, dict):
+            container_issues.append("companion-runtime service must be a mapping")
+        else:
+            if service.get("network_mode") != "host":
+                container_issues.append("companion-runtime must use network_mode: host")
+            if service.get("container_name") != "auto-scout-melodic":
+                container_issues.append("companion-runtime must use the auto-scout-melodic container name")
+
+            env = service.get("environment", {})
+            if not isinstance(env, dict):
+                container_issues.append("companion-runtime environment must be a mapping")
+            elif env.get("AUTO_SCOUT_SITE_CONFIG") != "/opt/catkin_ws/src/auto-scout/config/site.yaml":
+                container_issues.append(
+                    "companion-runtime must expose AUTO_SCOUT_SITE_CONFIG for the repo-local site inventory"
+                )
+
+        if "roslaunch auto-scout companion_runtime.launch" not in compose_text:
+            container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
+        if "/opt/ros/melodic/setup.bash" not in compose_text:
+            container_issues.append("companion-runtime command must source /opt/ros/melodic/setup.bash")
+
+    if dockerfile_path.is_file():
+        dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
+        required_dockerfile_strings = [
+            "ENV ROS_DISTRO=melodic",
+            "ros-melodic-ros-base",
+            "ros-melodic-gmapping",
+            "ros-melodic-move-base",
+        ]
+        for item in required_dockerfile_strings:
+            if item not in dockerfile_text:
+                container_issues.append("container/Dockerfile missing '{}'".format(item))
+
+    if container_issues:
+        report.add(
+            "repo.companion_container_contract",
+            "fail",
+            "Companion container does not match the supported single-container ROS1 design",
+            details=container_issues,
+        )
+    else:
+        report.add(
+            "repo.companion_container_contract",
+            "pass",
+            "Companion stack stays inside one host-networked ROS1 container",
+        )
+
     cli_issues = []
     for path in [
         "auto-scout",
@@ -603,6 +664,36 @@ def _add_companion_checks(report, site_config, runtime_profile):
     )
 
 
+def _add_pose_gate_check(report, site_config):
+    scout = role_config(site_config, "scout")
+    companion = role_config(site_config, "companion")
+
+    declared_sources = []
+    if scout.get("capabilities", {}).get("pose", False):
+        declared_sources.append("scout")
+    if companion.get("capabilities", {}).get("pose", False):
+        declared_sources.append("companion")
+
+    if declared_sources:
+        report.add(
+            "runtime.pose_gate",
+            "pass",
+            "A pose source is declared for mapping and patrol",
+            details=["Declared pose provider(s): {}".format(", ".join(declared_sources))],
+        )
+        return
+
+    report.add(
+        "runtime.pose_gate",
+        "fail",
+        "Pose remains the primary integration blocker for mapping and patrol",
+        details=[
+            "Neither roles.scout.capabilities.pose nor roles.companion.capabilities.pose is enabled.",
+            "Prove odometry or another pose source before treating navigation-stack changes as the next step.",
+        ],
+    )
+
+
 def _add_resource_check(report):
     home_dir = Path.home()
     disk_total, disk_used, disk_free = shutil.disk_usage(str(home_dir))
@@ -700,6 +791,7 @@ def add_runtime_checks(report, site_config, site_path, effective_role, runtime_p
     if effective_role in ["companion", "system"]:
         _add_companion_checks(report, site_config, runtime_profile)
 
+    _add_pose_gate_check(report, site_config)
     _add_mission_checks(report, site_config)
 
 

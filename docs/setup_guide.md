@@ -21,6 +21,8 @@ The clean-slate runtime split in this repo is:
 - `auto-scout` as the headless operator CLI
 - `config/site.yaml` as the single inventory for both hosts
 
+For open-source use, treat `config/site.yaml` as a generated or user-owned inventory, not a file that should require manual patching to hardcoded usernames. Use `./auto-scout configure scout` and `./auto-scout configure companion` to write it, or pass flags such as `--ssh-user`, `--workspace-dir`, and `--storage-root` directly to `configure` or `deploy`.
+
 ## 2. Hardware Layout
 
 Recommended layout:
@@ -33,9 +35,10 @@ Recommended layout:
 Recommended companion targets:
 
 - Preferred host: Ubuntu Server 24.04 LTS arm64 on the Raspberry Pi 5
-- Preferred ROS userspace: Ubuntu 18.04 + ROS Melodic inside the companion container
+- Preferred ROS userspace: Ubuntu 18.04 + ROS Melodic inside one host-networked companion container
 - Acceptable fallback: Ubuntu 16.04 + ROS Kinetic
 - Not recommended for this repo's current assumptions: trying to force everything onto the Scout itself
+- Not recommended for v1: a `ros1_bridge` plus ROS2-first design on Ubuntu 24.04
 
 ## 3. Scout-Side Access
 
@@ -49,6 +52,12 @@ What you need from the Scout side:
 - a reliable way to start and stop media capture
 
 If the public `rollereye` Python API is available, treat it as the primary Scout control API until you prove a more standard ROS interface exists on your unit.
+
+Do not assume the first integration step is joining the Scout's ROS master over the network. First prove what your unit actually exposes:
+
+- a usable remote ROS graph
+- only vendor APIs
+- or a mixed surface where vendor APIs and a few ROS topics coexist
 
 ## 4. LD19 Bring-Up
 
@@ -72,6 +81,31 @@ Install a ROS1 navigation stack on the companion host.
 
 The supported repo path is now to deploy the companion stack through the container files in `container/` and manage it via `./auto-scout deploy companion`.
 
+Recommended operator flow:
+
+```bash
+# Write companion settings with prompts
+./auto-scout configure companion
+
+# Or set them explicitly without prompts
+./auto-scout configure companion \
+  --non-interactive \
+  --ssh-host auto-scout-pi5.local \
+  --ssh-user automark \
+  --workspace-dir /home/automark/auto-scout \
+  --storage-root /srv/auto-scout
+
+# Then deploy
+./auto-scout deploy companion --non-interactive
+```
+
+Container expectations:
+
+- one service: `companion-runtime`
+- `network_mode: host`
+- ROS1-era autonomy packages inside the container
+- Scout-side motion and sensor integration kept outside the container boundary unless proven otherwise on your unit
+
 Recommended package set:
 
 - `slam_gmapping`
@@ -88,6 +122,13 @@ Why this stack:
 - it is lighter than more modern alternatives
 - it is realistic for a Scout-plus-companion architecture
 
+Do not make these part of the first hardware milestone:
+
+- `ros1_bridge`
+- Nav2
+- SLAM Toolbox
+- continuous YOLO or audio inference on the Pi 5
+
 ## 6. Pose / Odometry Requirement
 
 This is the main integration risk.
@@ -102,6 +143,8 @@ You need one of:
 
 Do not start full-house autonomous mapping until this piece is solved.
 
+This is the main reason the repo stays on the ROS1 companion path for v1. Until pose is proven, changing autonomy frameworks adds risk without solving the gating dependency.
+
 ## 7. Storage Policy
 
 Use a conservative storage plan:
@@ -115,6 +158,8 @@ Suggested directories on the companion:
 - `/srv/auto-scout/maps`
 - `/srv/auto-scout/media`
 - `/srv/auto-scout/events`
+
+If you prefer a different root, set it through `--storage-root`. The deploy path derives `maps`, `media`, and `events` under that root automatically.
 
 ## 8. Mapping Workflow
 
@@ -154,6 +199,8 @@ This repo now treats heavyweight local Torch inference as offboard-only unless y
 Use these commands as the supported operator flow:
 
 ```bash
+./auto-scout configure scout
+./auto-scout configure companion
 ./auto-scout deploy scout
 ./auto-scout deploy companion
 ./auto-scout validate system

@@ -1,3 +1,5 @@
+# Example unit only. `./auto-scout deploy companion` renders a role-specific
+# service with the configured username, workspace path, and storage root.
 [Unit]
 Description=Auto-Scout companion runtime
 After=network-online.target docker.service

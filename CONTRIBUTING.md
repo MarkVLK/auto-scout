@@ -6,9 +6,11 @@ Auto-Scout is maintained around a companion-first ROS1 architecture. Contributio
 
 ### Baseline assumptions
 - Any Unix-like machine with `python3` and `git` is enough for repo validation work.
-- The target companion runtime is still Ubuntu 18.04 + ROS Melodic.
+- The target companion host is Ubuntu 24.04 on the Pi 5.
+- The target autonomy userspace is still one host-networked Ubuntu 18.04 + ROS Melodic companion container.
 - Ubuntu 16.04 + ROS Kinetic is an acceptable fallback for older ROS1 environments.
 - Do not assume ROS Noetic or a Scout-only deployment path unless you are explicitly updating the documented architecture.
+- Do not add `ros1_bridge`, mixed ROS 2 distro boundaries, Nav2, or SLAM Toolbox as the default v1 path unless you are explicitly updating the documented architecture.
 
 ### Local setup
 ```bash
@@ -32,7 +34,9 @@ source devel/setup.bash
 These are the public entrypoints we actively support:
 
 - `python3 check_scout_compatibility.py --mode {repo|runtime|all}`
-- `./tools/deploy.sh <scout-ip> <user>`
+- `./auto-scout configure {scout|companion}`
+- `./auto-scout deploy {scout|companion}`
+- `./tools/deploy.sh [scout|companion] ...`
 - `config/scout_config.yaml`
 
 Please avoid adding replacement wrappers, duplicate config templates, or one-off deployment helpers unless there is a clear long-term need.
@@ -59,6 +63,7 @@ Notes:
 - Prefer small, explicit modules over broad convenience layers.
 - Keep configuration in `config/scout_config.yaml` rather than scattering parallel defaults across docs, scripts, and examples.
 - When adding ROS launch or runtime behavior, keep Scout-side work lightweight and put heavier autonomy assumptions on the companion side.
+- Treat pose and odometry as the gating dependency for mapping and patrol work; do not hide that by shifting to a different autonomy framework.
 - Remove dead code and outdated docs when they stop matching the supported architecture.
 
 ## Documentation

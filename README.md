@@ -9,13 +9,15 @@ The clean-slate reset in this repo now treats the runnable system as two explici
 
 ## Reality Check
 
-As of April 2, 2026, the most relevant public sources say:
+As of April 18, 2026, the most relevant public sources say:
 
 - Moorebot's product page lists a quad-core ARM A7 @ 1.2 GHz, 512 MB RAM, Linux + "ROS 1.4", IMU, ToF, 1080p camera, and mecanum wheels.
 - The Moorebot Scout User Manual V4.0 lists 4 GB eMMC and describes patrol creation as manually driving a path from the dock and saving it.
 - Moorebot's FAQ says the onboard flash is 8 GB, user-accessible storage is only about 2 to 3 GB, and there is no SD card slot.
 - Moorebot's official open-source repo recommends an Ubuntu 18.04 build environment and exposes a custom `rollereye` Python API plus topics such as `/CoreNode/h264`, `/SensorNode/imu`, and `/SensorNode/tof`.
 - ROS REP-3 maps ROS 1 distros to host platforms as follows: Kinetic -> Ubuntu 16.04 / Python 2.7, Melodic -> Ubuntu 18.04 / Python 2.7, Noetic -> Ubuntu 20.04 / Python 3.8.
+- Upstream `ros1_bridge` docs say Ubuntu 24.04 is not a supported `ros1_bridge` environment because ROS 1 is not available there.
+- Upstream ROS 2 release docs say cross-distribution communication is not guaranteed and should not be relied upon as a supported contract.
 
 That combination means:
 
@@ -39,12 +41,20 @@ Use two execution tiers:
 
 2. Companion runtime
 
-- Run on Ubuntu 18.04 + ROS Melodic if you can choose the host.
+- Run Ubuntu 24.04 on the Raspberry Pi 5 host.
+- Keep the supported autonomy userspace inside one host-networked ROS1 companion container.
+- Prefer Ubuntu 18.04 + ROS Melodic inside that container.
 - Fall back to Ubuntu 16.04 + ROS Kinetic only if you must match an older ROS1 environment.
 - Run `slam_gmapping`, `map_server`, `amcl`, `move_base`, and optional `explore_lite`.
 - Store maps and patrol media here first, then forward to NAS, cloud, or messaging integrations.
 
 This is the only architecture in this repo that currently lines up with the public Scout hardware constraints.
+
+Not recommended for v1:
+
+- a `ros1_bridge`-centered design on Ubuntu 24.04
+- mixed ROS 2 distro boundaries such as Humble bridge nodes talking to Jazzy host nodes
+- making Nav2, SLAM Toolbox, or continuous companion-side ML inference part of the first hardware bring-up
 
 ## Runtime Layout
 
@@ -118,6 +128,45 @@ The repository no longer claims that the stock Scout is a drop-in ROS Noetic rob
 
 Deployment support is intentionally narrow and now routes through the headless CLI. `tools/deploy.sh` remains as a compatibility wrapper around `./auto-scout deploy scout`.
 
+## Install And Deploy Defaults
+
+The install/deploy path is now designed to be configurable without hand-editing hardcoded usernames and paths.
+
+- Use `./auto-scout configure scout` or `./auto-scout configure companion` to write or update `config/site.yaml`
+- Pass values such as `--ssh-user`, `--ssh-host`, `--workspace-dir`, `--service-user`, or `--storage-root` on the CLI when you already know them
+- If you omit those flags in an interactive shell, the CLI prompts you with the current/default value and lets you accept it or replace it
+- Use `--non-interactive` when you want saved values or explicit flags to be used without prompts
+
+For example:
+
+```bash
+# Write or refresh the companion inventory with prompts
+./auto-scout configure companion
+
+# Configure without prompts
+./auto-scout configure companion \
+  --non-interactive \
+  --ssh-host auto-scout-pi5.local \
+  --ssh-user automark \
+  --workspace-dir /home/automark/auto-scout \
+  --storage-root /srv/auto-scout
+```
+
+## Validation Order
+
+Treat the bring-up sequence as:
+
+1. Verify the real Scout surface first:
+   decide whether your rooted unit exposes a usable remote ROS graph, only vendor APIs, or a mix
+2. Prove scan plus pose:
+   until a pose source is declared and tested, neither `move_base` nor Nav2 is the next problem
+3. Start with manual-drive mapping:
+   validate `/scan`, TF, and pose inside the companion container, then save and reload a map
+4. Add patrol next:
+   only after map save/load and localization work
+5. Add dog search last:
+   as a thin reporting layer on top of a proven map and patrol stack
+
 ## Key Files
 
 - [docs/VERIFIED_ARCHITECTURE.md](/Users/markvlcek/Code/auto-scout/docs/VERIFIED_ARCHITECTURE.md): verified facts, compatibility matrix, and system design
@@ -161,6 +210,10 @@ Deployment support is intentionally narrow and now routes through the headless C
 Use the headless CLI for supported deployment, validation, and smoke-mission workflows:
 
 ```bash
+# Configure the saved inventory first, or let deploy prompt you interactively
+./auto-scout configure scout
+./auto-scout configure companion
+
 # Deploy the thin Scout runtime
 ./auto-scout deploy scout
 

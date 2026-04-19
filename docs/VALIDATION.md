@@ -2,6 +2,8 @@
 
 `check_scout_compatibility.py` is now the canonical validation entry point for this repo, and `./auto-scout validate ...` is the supported operator-facing wrapper around it.
 
+For install-time configuration, the supported companion and Scout entrypoints are now `./auto-scout configure scout` and `./auto-scout configure companion`. Those commands can prompt for usernames, SSH targets, workspace directories, and storage roots, or accept them via flags for automation.
+
 It has three modes:
 
 ```bash
@@ -31,6 +33,8 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 - `config/missions/smoke_loop.yaml` mission contract
 - launch file structure for `scout-runtime` and `companion-runtime`
 - service/container files for the reset deployment model
+- the companion container contract:
+  one host-networked ROS1 companion container with the expected Melodic launch path
 - legacy UI and voice quarantine stubs
 - mission-critical Python files for syntax and expected entry points
 
@@ -40,8 +44,18 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 - role declarations in `config/site.yaml`
 - companion storage directories and container stack expectations
 - Scout bridge, camera, and scan capability declarations
+- whether pose is still the gating missing capability for mapping and patrol
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
+
+## What Failure Means Right Now
+
+On the default repo inventory, `./auto-scout validate system` is expected to fail until you prove pose, docking, and notification capabilities on real hardware. That is intentional.
+
+The most important runtime gate is pose:
+
+- if `roles.scout.capabilities.pose` and `roles.companion.capabilities.pose` are both false, treat that as the primary blocker
+- do not switch to Nav2, SLAM Toolbox, or a `ros1_bridge` design while that gate is still failing
 
 ## Regression Test
 

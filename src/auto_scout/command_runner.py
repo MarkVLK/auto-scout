@@ -75,3 +75,11 @@ class CommandRunner:
             command.extend(["--exclude", item])
         command.extend([source_dir, target])
         return self.run(command)
+
+    def copy_to_remote(self, ssh_config, source_path, target_path):
+        """Copy one local file to a remote path using SCP."""
+        port = str(ssh_config.get("port", 22))
+        target = "{}@{}:{}".format(ssh_config["user"], ssh_config["host"], target_path)
+        return self.run(
+            ["scp", "-P", port, source_path, target],
+        )

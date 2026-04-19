@@ -1,6 +1,6 @@
 # Verified Architecture Notes
 
-This document captures what was verified against public Moorebot and ROS sources on April 2, 2026, plus the design decisions that follow from those facts.
+This document captures what was verified against public Moorebot and ROS sources on April 18, 2026, plus the design decisions that follow from those facts.
 
 ## 1. Verified Facts
 
@@ -34,6 +34,11 @@ ROS REP-3 says:
 - ROS Kinetic targets Ubuntu 16.04 and Python 2.7
 - ROS Melodic targets Ubuntu 18.04 and Python 2.7
 - ROS Noetic targets Ubuntu 20.04 and Python 3.8
+
+Upstream ROS docs also say:
+
+- `ros1_bridge` is not supported on Ubuntu 24.04 because ROS 1 is not available there
+- ROS 2 cross-distribution communication is not guaranteed and should not be relied upon as a supported contract
 
 ## 2. Key Conclusions
 
@@ -69,6 +74,12 @@ The companion computer should own:
 - media storage
 - notifications and webhooks
 
+### Conclusion D: a ROS2 bridge-first architecture is the wrong v1 optimization
+
+Running Ubuntu 24.04 on the Pi 5 host is fine. Making `ros1_bridge`, mixed ROS 2 distros, Nav2, or SLAM Toolbox the first integration milestone is not.
+
+The main gating dependency remains pose or odometry from the Scout side, a companion-side estimator, or another tested source. Until that exists, changing autonomy frameworks does not solve the actual blocker.
+
 ## 3. Recommended Architecture
 
 ### Scout side
@@ -87,8 +98,9 @@ Do not rely on Scout-side Torch inference by default.
 
 Recommended baseline:
 
-- Ubuntu 18.04
-- ROS Melodic
+- Ubuntu 24.04 host
+- one host-networked companion container
+- Ubuntu 18.04 + ROS Melodic inside that container
 - `slam_gmapping`
 - `map_server`
 - `amcl`
@@ -99,6 +111,13 @@ Fallback if needed:
 
 - Ubuntu 16.04
 - ROS Kinetic
+
+Defer until after mapping and patrol are proven:
+
+- `ros1_bridge`
+- Nav2
+- SLAM Toolbox
+- continuous companion-side ML workloads on the Pi 5
 
 ### Storage and reporting
 
@@ -183,6 +202,7 @@ The repo has been updated to reflect these conclusions:
 - A top-mounted LD19 may see furniture differently than the stock low camera and ToF stack.
 - Mecanum wheel slip can hurt localization quality on smooth floors.
 - Messaging integrations such as WhatsApp or Signal are likely easier through companion-side webhooks than from the Scout itself.
+- A specific rooted unit may expose vendor APIs, ROS topics, or both; do not assume that joining the Scout's ROS master is the correct first integration step.
 
 ## 8. Source Links
 
@@ -191,4 +211,6 @@ The repo has been updated to reflect these conclusions:
 - [Moorebot Scout User Manual V4.0](https://cdn.shopifycdn.net/s/files/1/0016/4616/6103/files/Scout_User_Manual_V4.0.pdf?v=1657247441)
 - [Pilot-Labs-Dev/Scout-open-source](https://github.com/Pilot-Labs-Dev/Scout-open-source)
 - [ROS REP-3 target platforms](https://www.ros.org/reps/rep-0003.html)
+- [ros1_bridge compatibility docs](https://docs.ros.org/en/humble/p/ros1_bridge/index.html)
+- [ROS 2 distributions docs](https://docs.ros.org/en/rolling/Releases.html)
 - [m-explore / explore_lite](https://index.ros.org/r/m_explore/)

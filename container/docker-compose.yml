@@ -4,16 +4,22 @@ services:
       context: ..
       dockerfile: container/Dockerfile
     container_name: auto-scout-melodic
+    # DDS-style discovery is not part of the supported v1 path here, but host
+    # networking still keeps the ROS graph boundary simple and avoids hidden
+    # container-network assumptions during Scout bring-up.
     network_mode: host
     privileged: true
     working_dir: /opt/catkin_ws/src/auto-scout
     volumes:
       - ..:/opt/catkin_ws/src/auto-scout
-      - /srv/auto-scout:/srv/auto-scout
+      - ${AUTO_SCOUT_STORAGE_ROOT:-/srv/auto-scout}:/srv/auto-scout
       - /dev:/dev
     environment:
       AUTO_SCOUT_CONFIG: /opt/catkin_ws/src/auto-scout/config/scout_config.yaml
       AUTO_SCOUT_SITE_CONFIG: /opt/catkin_ws/src/auto-scout/config/site.yaml
+      # The supported v1 path treats the companion container as the autonomy
+      # boundary. Do not replace this with a ros1_bridge/Jazzy boundary unless
+      # the documented architecture is intentionally being changed.
       ROS_MASTER_URI: http://localhost:11311
       ROS_HOSTNAME: localhost
     command:

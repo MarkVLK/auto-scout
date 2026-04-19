@@ -2,8 +2,11 @@
 set -euo pipefail
 
 ACTION="${1:-up}"
-REPO_ROOT="/opt/auto-scout"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${AUTO_SCOUT_WORKSPACE:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 COMPOSE_FILE="${REPO_ROOT}/container/docker-compose.yml"
+AUTO_SCOUT_STORAGE_ROOT="${AUTO_SCOUT_STORAGE_ROOT:-/srv/auto-scout}"
+export AUTO_SCOUT_STORAGE_ROOT
 
 cd "${REPO_ROOT}/container"
 
