@@ -193,6 +193,114 @@ Treat the bring-up sequence as:
 - [tools/deploy.sh](tools/deploy.sh): supported Scout deployment entrypoint
 - [docs/VALIDATION.md](docs/VALIDATION.md): how to run the validator and why older check scripts were retired
 
+## Repository Directory Listing
+
+This listing covers the maintained tracked project tree and also calls out the local generated directories you will usually see in a working checkout. It intentionally skips `.git`, `__pycache__`, and other interpreter or VCS internals.
+
+```text
+.
+|-- .gitignore                          # Ignore Python, ROS, build, media, and local override artifacts.
+|-- CHANGELOG.md                        # Historical changelog; older entries reflect pre-reset functionality.
+|-- CMakeLists.txt                      # Catkin build/install definition for ROS launch files, configs, docs, and Python nodes.
+|-- CONTRIBUTING.md                     # Contributor guidance aligned with the companion-first reset.
+|-- LICENSE                             # MIT license for the repository.
+|-- README.md                           # Primary project overview, architecture notes, and operator guidance.
+|-- auto-scout                          # Repo-local Python entrypoint for the headless CLI.
+|-- check_scout_compatibility.py        # Canonical validator for repo contracts, runtime assumptions, and mission readiness.
+|-- package.xml                         # ROS package manifest and dependency declaration.
+|-- requirements.txt                    # Python dependency list for runtime, validation, and tests.
+|-- setup.py                            # Python packaging metadata and console-script entrypoint definition.
+|-- artifacts/                          # Local artifact root created by CLI runs; ignored by git.
+|   `-- runs/                           # Timestamped configure, deploy, validate, and mission output directories.
+|-- config/                             # Runtime, inventory, mission, and navigation parameter files.
+|   |-- base_local_planner_params.yaml  # TrajectoryPlannerROS tuning for local path execution.
+|   |-- costmap_common_params.yaml      # Shared obstacle, footprint, and laser source settings for costmaps.
+|   |-- global_costmap_params.yaml      # Global costmap frame and update settings.
+|   |-- global_planner_params.yaml      # GlobalPlanner behavior and cost tuning.
+|   |-- local_costmap_params.yaml       # Local rolling-window costmap configuration.
+|   |-- scout_config.yaml               # Main runtime config covering topics, storage, waypoints, safety, and navigation defaults.
+|   |-- site.yaml                       # Dual-host site inventory for Scout and companion roles.
+|   `-- missions/                       # Mission definitions invoked through the CLI.
+|       `-- smoke_loop.yaml             # Proof mission that loops rooms, returns, captures media, and notifies.
+|-- container/                          # Companion container build and compose assets.
+|   |-- .env.example                    # Example environment variables for direct Docker Compose usage.
+|   |-- Dockerfile                      # Ubuntu 18.04 plus ROS Melodic container image for the companion runtime.
+|   |-- docker-compose.yml              # Host-networked companion stack definition and launch command.
+|   `-- entrypoint.sh                   # Small container entrypoint that sources ROS and execs the requested command.
+|-- data/                               # Placeholder for local maps, calibration data, or samples; empty in git.
+|-- docs/                               # Supporting architecture, setup, quick-start, and validation guides.
+|   |-- QUICKSTART.md                   # Short path to probe, deploy, map, and validate the supported stack.
+|   |-- VALIDATION.md                   # Detailed validator modes, checks, and failure interpretation.
+|   |-- VERIFIED_ARCHITECTURE.md        # Verified hardware/software facts and the design conclusions derived from them.
+|   `-- setup_guide.md                  # End-to-end Moorebot Scout plus LD19 companion setup guide.
+|-- launch/                             # ROS launch entrypoints for Scout and companion roles.
+|   |-- companion_runtime.launch        # Selects mapping or localization mode and starts the companion heartbeat.
+|   |-- navigation.launch               # Companion localization plus `move_base` stack for saved-map patrols.
+|   |-- scout_complete.launch           # Combined bring-up wrapper for optional local Scout bridge plus companion runtime.
+|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, lidar, camera, odom, and motion nodes.
+|   `-- slam_mapping.launch             # Companion-side gmapping stack with robot model and transforms.
+|-- legacy/                             # Quarantined browser and voice surfaces that are no longer on the supported path.
+|   |-- README.md                       # Explains what was retired and where the supported interfaces now live.
+|   |-- dashboard.html                  # Old browser dashboard UI asset kept for reference only.
+|   |-- scout-web.service               # Legacy systemd unit for the retired web interface.
+|   |-- scout_web_interface_legacy.py   # Archived Flask and Socket.IO dashboard implementation.
+|   `-- voice_command_interface_legacy.py # Archived speech-recognition control surface.
+|-- rviz/                               # RViz visualization presets.
+|   `-- scout_navigation.rviz           # RViz workspace for scan, map, robot model, and path visualization.
+|-- scripts/                            # Shell entrypoints used by rendered systemd services.
+|   |-- start_companion_stack.sh        # Starts or stops the companion Docker Compose stack.
+|   `-- start_scout_runtime.sh          # Sources ROS/catkin state and launches the Scout runtime.
+|-- src/                                # Python source tree for CLI, runtime nodes, and helpers.
+|   |-- __init__.py                     # Top-level package metadata.
+|   |-- companion_runtime_agent.py      # Python 2 Scout-compatible companion heartbeat publisher.
+|   |-- companion_runtime_support.py    # Python 2 helper functions shared by companion ROS scripts.
+|   |-- config_utils.py                 # Thin compatibility wrapper around Scout config loading helpers.
+|   |-- dog_detection_module.py         # External dog-detection event bridge that persists companion-side events.
+|   |-- ld19_lidar_driver.py            # ROS driver that reads LD19 packets and publishes `sensor_msgs/LaserScan`.
+|   |-- ld19_protocol.py                # Reusable LD19 packet parsing and scan assembly helpers.
+|   |-- map_file_guard.py               # Fails localization launch early when the configured map file is missing.
+|   |-- scout_camera_driver.py          # Lightweight compressed-image camera bridge for the Scout runtime.
+|   |-- scout_motion_bridge.py          # Republish standard autonomy `Twist` commands onto the vendor motion topic.
+|   |-- scout_navigation_controller.py  # Python 2 companion-side smoke-loop mission runner.
+|   |-- scout_odom_bridge.py            # Normalize vendor odometry into `/odom` plus TF.
+|   |-- scout_runtime_agent.py          # Python 2 Scout runtime heartbeat publisher.
+|   |-- scout_runtime_config.py         # Python 2-safe site/config loader for Scout-launched nodes.
+|   |-- scout_web_interface.py          # Explicit stub that exits and points users at the retired legacy dashboard.
+|   |-- voice_command_interface.py      # Explicit stub that exits and points users at the retired legacy voice path.
+|   `-- auto_scout/                     # Python 3 package for the clean-slate CLI and shared runtime logic.
+|       |-- __init__.py                 # Package version marker for the clean-slate runtime.
+|       |-- artifacts.py                # Helpers for writing timestamped artifact logs and JSON outputs.
+|       |-- cli.py                      # Argument parser and command dispatcher for configure, deploy, validate, probe, and run.
+|       |-- command_runner.py           # Local, SSH, rsync, and SCP command execution helpers with dry-run support.
+|       |-- deploy.py                   # Scout and companion deployment routines plus rendered systemd service templates.
+|       |-- install_config.py           # Interactive and flag-driven install/deploy configuration helpers.
+|       |-- live_probe.py               # Live Scout topic/device probing and site-inventory reconciliation logic.
+|       |-- mission_config.py           # Mission path resolution and YAML loading helpers.
+|       |-- mission_runner.py           # Mission gating and remote smoke-loop invocation helpers.
+|       |-- paths.py                    # Common repository path constants.
+|       |-- site_config.py              # Site inventory defaults, read/write helpers, and role-specific accessors.
+|       |-- yaml_loader.py              # YAML load/dump helpers with repo-local fallback parsing.
+|       `-- runtime/                    # Python 3 runtime-side helpers that mirror the Python 2 agents/controllers.
+|           |-- __init__.py             # Runtime helper package marker.
+|           |-- heartbeat.py            # Role-aware Python 3 heartbeat publisher for Scout or companion.
+|           `-- mission_controller.py   # Lean Python 3 companion smoke mission controller implementation.
+|-- systemd/                            # Example service units; deploy renders role-specific variants from code.
+|   |-- auto-scout-companion-runtime.service # Example companion systemd unit.
+|   `-- auto-scout-scout-runtime.service # Example Scout systemd unit.
+|-- templates/                          # Placeholder for local or legacy template assets; empty in git.
+|-- tests/                              # Regression coverage for validator, probing, and LD19 parsing behavior.
+|   |-- __init__.py                     # Test package marker.
+|   |-- test_ld19_protocol.py           # Unit tests for LD19 packet parsing and scan assembly.
+|   |-- test_live_probe.py              # Unit tests for live Scout probing inference and config suggestions.
+|   `-- test_validation_cli.py          # End-to-end regression tests for the validator and CLI contracts.
+|-- tools/                              # Compatibility utilities and wrappers used by the runtime and operators.
+|   |-- deploy.sh                       # Compatibility shell wrapper around `./auto-scout deploy`.
+|   `-- yaml_fallback.py                # Minimal YAML parser used when PyYAML is unavailable.
+|-- urdf/                               # Robot description assets.
+|   `-- scout.urdf                      # Minimal Scout robot model with base, lidar, camera, and IMU frames.
+`-- validation-report.json              # Local validator JSON output in this checkout; generated and ignored by git.
+```
+
 ## Suggested Phased Plan
 
 ### Phase 1
