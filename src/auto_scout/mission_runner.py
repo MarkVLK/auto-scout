@@ -6,6 +6,7 @@ import shlex
 from auto_scout.command_runner import CommandRunner
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG
 from auto_scout.site_config import role_config, system_capabilities
+from auto_scout.site_config import remote_site_config_path
 
 
 CONTAINER_WORKSPACE = "/opt/catkin_ws/src/auto-scout"
@@ -48,7 +49,7 @@ def _build_smoke_loop_remote_command(companion, mission_path, artifact_run):
     """Return the remote command that runs the smoke loop inside the companion container."""
     ros_settings = companion.get("ros", {})
     container_name = ros_settings.get("container_name", "auto-scout-melodic")
-    container_site = os.path.join(CONTAINER_WORKSPACE, "config", "site.yaml")
+    container_site = remote_site_config_path(CONTAINER_WORKSPACE)
     container_config = os.path.join(CONTAINER_WORKSPACE, "config", os.path.basename(str(DEFAULT_SCOUT_CONFIG)))
     container_mission = os.path.join(CONTAINER_WORKSPACE, "config", "missions", os.path.basename(mission_path))
     container_artifact_dir = os.path.join(

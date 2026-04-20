@@ -29,7 +29,7 @@ class FakeRunner:
     def __init__(self, overrides=None):
         self.lookup = {
             "printf 'ROS_MASTER_URI=%s": FakeCommandResult(
-                stdout="ROS_MASTER_URI=http://moorebot-scout.local:11311\nROS_HOSTNAME=moorebot-scout.local\nROS_IP=\n",
+                stdout="ROS_MASTER_URI=http://scout.example.test:11311\nROS_HOSTNAME=scout.example.test\nROS_IP=\n",
             ),
             "rostopic list": FakeCommandResult(
                 stdout="/scan\n/camera/image_raw/compressed\n/MotorNode/baselink_odom_relative\n/cmd_vel_force\n",
@@ -73,6 +73,9 @@ class FakeRunner:
             if needle in command_text:
                 return result
         return FakeCommandResult(ok=False, stderr="unexpected command: {}".format(command_text))
+
+    def run_remote(self, ssh_config, remote_command, check=True, batch_mode=None, connect_timeout=5):
+        return self.run(remote_command, check=check)
 
 
 class LiveProbeTest(unittest.TestCase):

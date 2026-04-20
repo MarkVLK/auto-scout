@@ -14,6 +14,7 @@ DEFAULT_SCOUT_WORKSPACE = "/userdata/catkin_ws/src/auto-scout"
 DEFAULT_CAMERA_DEVICE = "/dev/video0"
 DEFAULT_LIDAR_DEVICE = "/dev/ttyS4"
 DEFAULT_SCOUT_DRIVE_MODEL = "diff"
+DEFAULT_SSH_AUTH_MODE = "agent"
 
 SCOUT_TOPIC_FALLBACKS = {
     "lidar_scan": "lidar_scan",
@@ -26,6 +27,7 @@ SCOUT_TOPIC_FALLBACKS = {
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 DEFAULT_SITE_CONFIG = os.path.join(REPO_ROOT, "config", "site.yaml")
+DEFAULT_SITE_LOCAL_CONFIG = os.path.join(REPO_ROOT, "config", "site_local.yaml")
 DEFAULT_SCOUT_CONFIG = os.path.join(REPO_ROOT, "config", "scout_config.yaml")
 
 
@@ -69,6 +71,13 @@ def _deep_merge(base, override):
     return base
 
 
+def _default_ssh_auth(mode=DEFAULT_SSH_AUTH_MODE, key_path=""):
+    return {
+        "mode": str(mode or DEFAULT_SSH_AUTH_MODE).strip().lower(),
+        "key_path": str(key_path or ""),
+    }
+
+
 def candidate_config_paths(explicit_path=None):
     """Return config candidates in most-specific to least-specific order."""
     home_dir = os.path.expanduser("~")
@@ -96,16 +105,23 @@ def candidate_config_paths(explicit_path=None):
 
 
 def candidate_site_paths(explicit_path=None):
-    """Return site inventory candidates in most-specific to least-specific order."""
+    """Return site inventory candidates in merge order."""
+    explicit = explicit_path or os.environ.get("AUTO_SCOUT_SITE_CONFIG")
+    if explicit:
+        return [os.path.abspath(explicit)]
+
     home_dir = os.path.expanduser("~")
     candidates = [
-        explicit_path,
-        os.environ.get("AUTO_SCOUT_SITE_CONFIG"),
         DEFAULT_SITE_CONFIG,
+        DEFAULT_SITE_LOCAL_CONFIG,
         os.path.join(home_dir, "auto-scout", "config", "site.yaml"),
+        os.path.join(home_dir, "auto-scout", "config", "site_local.yaml"),
         os.path.join(home_dir, "catkin_ws", "src", "auto-scout", "config", "site.yaml"),
+        os.path.join(home_dir, "catkin_ws", "src", "auto-scout", "config", "site_local.yaml"),
         os.path.join(DEFAULT_SCOUT_WORKSPACE, "config", "site.yaml"),
+        os.path.join(DEFAULT_SCOUT_WORKSPACE, "config", "site_local.yaml"),
         "/opt/auto-scout/config/site.yaml",
+        "/opt/auto-scout/config/site_local.yaml",
     ]
 
     result = []
@@ -146,6 +162,7 @@ def default_site_config():
                     "host": DEFAULT_SCOUT_SSH_HOST,
                     "user": scout_user,
                     "port": 22,
+                    "auth": _default_ssh_auth(),
                 },
                 "service_user": scout_user,
                 "service_group": scout_user,
@@ -204,8 +221,7 @@ def load_site_config(path=None):
         loaded = _load_yaml(candidate)
         if isinstance(loaded, dict):
             _deep_merge(config, loaded)
-        return config, candidate
-    return config, path or DEFAULT_SITE_CONFIG
+    return config, path or os.environ.get("AUTO_SCOUT_SITE_CONFIG") or DEFAULT_SITE_LOCAL_CONFIG
 
 
 def load_site_inventory(explicit_path=None):

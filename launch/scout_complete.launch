@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
-  <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
+  <arg name="site_file" default="$(optenv AUTO_SCOUT_SITE_CONFIG $(find auto-scout)/config/site.yaml)" />
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml" />
   <arg name="localization_mode" default="true" />
   <arg name="run_local_scout_bridge" default="false" />

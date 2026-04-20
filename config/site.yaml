@@ -7,15 +7,18 @@ roles:
     hostname: "moorebot-scout"
     workspace_dir: "/userdata/catkin_ws/src/auto-scout"
     ssh:
-      host: "192.168.0.199"
+      host: "scout-host-or-ip.invalid"
       user: "linaro"
       port: 22
+      auth:
+        mode: "agent"
+        key_path: ""
     service_user: "linaro"
     service_group: "linaro"
     ros:
       distro: "melodic"
-      master_uri: "http://192.168.0.199:11311"
-      advertise_host: "192.168.0.199"
+      master_uri: "http://scout-host-or-ip.invalid:11311"
+      advertise_host: "scout-host-or-ip.invalid"
     devices:
       camera: "/dev/video0"
       lidar: "/dev/ttyS4"
@@ -49,9 +52,16 @@ roles:
 
   companion:
     hostname: "pi5-companion"
+    workspace_dir: "/home/ubuntu/auto-scout"
     ssh:
-      host: "auto-scout-pi5.local"
+      host: "companion-host-or-ip.invalid"
+      user: "ubuntu"
       port: 22
+      auth:
+        mode: "agent"
+        key_path: ""
+    service_user: "ubuntu"
+    service_group: "ubuntu"
     host_os:
       name: "ubuntu"
       version: "24.04"
@@ -61,8 +71,8 @@ roles:
       distro: "melodic"
       container_name: "auto-scout-melodic"
       compose_file: "container/docker-compose.yml"
-      master_uri: "http://192.168.0.199:11311"
-      advertise_host: "auto-scout-pi5.local"
+      master_uri: "http://scout-host-or-ip.invalid:11311"
+      advertise_host: "companion-host-or-ip.invalid"
     capabilities:
       camera: false
       scan: true

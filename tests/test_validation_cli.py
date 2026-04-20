@@ -128,16 +128,17 @@ class ValidationCliTest(unittest.TestCase):
                 "configure",
                 "companion",
                 "--non-interactive",
+                "--skip-connectivity-check",
                 "--ssh-host",
-                "pi5.local",
+                "pi5.example.test",
                 "--ssh-user",
                 "automark",
                 "--workspace-dir",
                 "/home/automark/auto-scout",
                 "--ros-master-uri",
-                "http://192.168.0.199:11311",
+                "http://192.0.2.10:11311",
                 "--advertise-host",
-                "pi5-host",
+                "companion.example.test",
                 "--service-user",
                 "automark",
                 "--service-group",
@@ -154,8 +155,8 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(payload["role"], "companion")
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["user"], "automark")
         self.assertEqual(site_config["roles"]["companion"]["workspace_dir"], "/home/automark/auto-scout")
-        self.assertEqual(site_config["roles"]["companion"]["ros"]["master_uri"], "http://192.168.0.199:11311")
-        self.assertEqual(site_config["roles"]["companion"]["ros"]["advertise_host"], "pi5-host")
+        self.assertEqual(site_config["roles"]["companion"]["ros"]["master_uri"], "http://192.0.2.10:11311")
+        self.assertEqual(site_config["roles"]["companion"]["ros"]["advertise_host"], "companion.example.test")
         self.assertEqual(site_config["roles"]["companion"]["storage"]["maps_dir"], "/mnt/auto-scout/maps")
 
     def test_cli_configure_scout_non_interactive_writes_drive_model(self):
@@ -167,16 +168,17 @@ class ValidationCliTest(unittest.TestCase):
                 "configure",
                 "scout",
                 "--non-interactive",
+                "--skip-connectivity-check",
                 "--ssh-host",
-                "192.168.0.199",
+                "192.0.2.10",
                 "--ssh-user",
                 "linaro",
                 "--workspace-dir",
                 "/userdata/catkin_ws/src/auto-scout",
                 "--ros-master-uri",
-                "http://192.168.0.199:11311",
+                "http://192.0.2.10:11311",
                 "--advertise-host",
-                "192.168.0.199",
+                "192.0.2.10",
                 "--service-user",
                 "linaro",
                 "--service-group",
@@ -199,14 +201,16 @@ class ValidationCliTest(unittest.TestCase):
                 "configure",
                 "companion",
                 "--prompt",
+                "--skip-connectivity-check",
                 input_text=(
                     "\n"
-                    "prompted-pi.local\n"
+                    "prompted-pi.example.test\n"
                     "automark\n"
                     "2200\n"
+                    "agent\n"
                     "/home/automark/auto-scout\n"
-                    "http://192.168.0.199:11311\n"
-                    "pi5-host\n"
+                    "http://192.0.2.10:11311\n"
+                    "companion.example.test\n"
                     "automark\n"
                     "automark\n"
                     "/var/lib/auto-scout\n"
@@ -218,7 +222,7 @@ class ValidationCliTest(unittest.TestCase):
             site_config = load_yaml(site_path)
 
         self.assertTrue(payload["prompted"])
-        self.assertEqual(site_config["roles"]["companion"]["ssh"]["host"], "prompted-pi.local")
+        self.assertEqual(site_config["roles"]["companion"]["ssh"]["host"], "prompted-pi.example.test")
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["user"], "automark")
         self.assertEqual(site_config["roles"]["companion"]["ssh"]["port"], 2200)
         self.assertEqual(site_config["roles"]["companion"]["storage"]["events_dir"], "/var/lib/auto-scout/events")
@@ -270,7 +274,27 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("Pose remains", pose_gate["summary"])
 
     def test_cli_deploy_scout_dry_run(self):
-        result = run_cli("deploy", "scout", "--dry-run")
+        result = run_cli(
+            "deploy",
+            "scout",
+            "--dry-run",
+            "--skip-connectivity-check",
+            "--non-interactive",
+            "--ssh-host",
+            "192.0.2.10",
+            "--ssh-user",
+            "linaro",
+            "--workspace-dir",
+            "/userdata/catkin_ws/src/auto-scout",
+            "--ros-master-uri",
+            "http://192.0.2.10:11311",
+            "--advertise-host",
+            "192.0.2.10",
+            "--service-user",
+            "linaro",
+            "--service-group",
+            "linaro",
+        )
 
         self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         payload = json.loads(result.stdout)
@@ -280,19 +304,31 @@ class ValidationCliTest(unittest.TestCase):
 
     def test_rendered_services_use_saved_ros_endpoints(self):
         site_config = default_site_config()
-        site_config["roles"]["scout"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
-        site_config["roles"]["scout"]["ros"]["advertise_host"] = "192.168.0.199"
+        site_config["roles"]["scout"]["ros"]["master_uri"] = "http://192.0.2.10:11311"
+        site_config["roles"]["scout"]["ros"]["advertise_host"] = "192.0.2.10"
         site_config["roles"]["scout"]["motion"]["drive_model"] = "omni"
-        site_config["roles"]["companion"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
-        site_config["roles"]["companion"]["ros"]["advertise_host"] = "pi5-host"
+        site_config["roles"]["companion"]["ros"]["master_uri"] = "http://192.0.2.10:11311"
+        site_config["roles"]["companion"]["ros"]["advertise_host"] = "companion.example.test"
 
         scout_service = _render_scout_service(site_config["roles"]["scout"])
         companion_service = _render_companion_service(site_config["roles"]["companion"], site_config["roles"]["scout"])
 
-        self.assertIn("Environment=ROS_MASTER_URI=http://192.168.0.199:11311", scout_service)
-        self.assertIn("Environment=ROS_HOSTNAME=192.168.0.199", scout_service)
-        self.assertIn("Environment=AUTO_SCOUT_ROS_MASTER_URI=http://192.168.0.199:11311", companion_service)
-        self.assertIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=pi5-host", companion_service)
+        self.assertIn("Environment=ROS_MASTER_URI=http://192.0.2.10:11311", scout_service)
+        self.assertIn("Environment=ROS_HOSTNAME=192.0.2.10", scout_service)
+        self.assertIn(
+            "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
+                site_config["roles"]["scout"]["workspace_dir"]
+            ),
+            scout_service,
+        )
+        self.assertIn("Environment=AUTO_SCOUT_ROS_MASTER_URI=http://192.0.2.10:11311", companion_service)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=companion.example.test", companion_service)
+        self.assertIn(
+            "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
+                site_config["roles"]["companion"]["workspace_dir"]
+            ),
+            companion_service,
+        )
         self.assertIn("Environment=AUTO_SCOUT_ODOM_MODEL_TYPE=omni", companion_service)
 
     def test_service_rendering_fails_fast_on_placeholder_ros_endpoints(self):
@@ -325,16 +361,21 @@ class ValidationCliTest(unittest.TestCase):
         env_example = (REPO_ROOT / "container" / ".env.example").read_text(encoding="utf-8")
 
         self.assertIn("localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}", compose_text)
+        self.assertIn("AUTO_SCOUT_SITE_CONFIG: ${AUTO_SCOUT_SITE_CONFIG}", compose_text)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE: ${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}", compose_text)
+        self.assertIn('AUTO_SCOUT_SITE_CONFIG="${AUTO_SCOUT_SITE_CONFIG:-${DEFAULT_SITE_CONFIG}}"', start_script)
+        self.assertIn("export AUTO_SCOUT_SITE_CONFIG", start_script)
         self.assertIn('AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"', start_script)
         self.assertIn('AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"', start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
         self.assertNotIn("moorebot-scout.local", start_script)
+        self.assertIn('<arg name="site_file" default="$(optenv AUTO_SCOUT_SITE_CONFIG $(find auto-scout)/config/site.yaml)" />', companion_launch)
         self.assertIn('<arg name="localization_mode" default="false" />', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)
         self.assertIn('<param name="odom_alpha5" value="0.2"/>', navigation_launch)
         self.assertIn("AUTO_SCOUT_ROS_MASTER_URI=http://<scout-ip>:11311", env_example)
+        self.assertIn("AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml", env_example)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE=diff", env_example)
 
     def test_smoke_loop_command_runs_inside_companion_container(self):
@@ -354,10 +395,10 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("source /opt/ros/melodic/setup.bash", command)
         self.assertIn("python2 src/scout_navigation_controller.py", command)
         self.assertNotIn("python3 src/scout_navigation_controller.py", command)
-        self.assertIn("/opt/catkin_ws/src/auto-scout/config/site.yaml", command)
+        self.assertIn("/opt/catkin_ws/src/auto-scout/config/site_local.yaml", command)
 
     def test_cli_smoke_loop_dry_run_fails_fast_on_unverified_site(self):
-        result = run_cli("run", "smoke-loop", "--dry-run")
+        result = run_cli("run", "smoke-loop", "--dry-run", "--skip-connectivity-check")
 
         self.assertEqual(result.returncode, 1, msg=result.stdout + result.stderr)
         payload = json.loads(result.stdout)

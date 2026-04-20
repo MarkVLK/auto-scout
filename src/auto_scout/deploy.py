@@ -5,7 +5,13 @@ import tempfile
 
 from auto_scout.command_runner import CommandRunner
 from auto_scout.paths import repo_root
-from auto_scout.site_config import companion_storage_root, normalize_drive_model, role_config, role_motion_setting, role_service_identity
+from auto_scout.site_config import companion_storage_root
+from auto_scout.site_config import normalize_drive_model
+from auto_scout.site_config import remote_site_config_path
+from auto_scout.site_config import role_config
+from auto_scout.site_config import role_motion_setting
+from auto_scout.site_config import role_service_identity
+from auto_scout.yaml_loader import dump_yaml
 
 
 SYNC_EXCLUDES = [
@@ -30,7 +36,7 @@ def _render_scout_service(role_settings):
     workspace_dir = role_settings["workspace_dir"]
     service_user, service_group = role_service_identity(role_settings)
     config_path = "{}/config/scout_config.yaml".format(workspace_dir)
-    site_path = "{}/config/site.yaml".format(workspace_dir)
+    site_path = remote_site_config_path(workspace_dir)
     ros_settings = role_settings.get("ros", {})
     ros_master_uri = _require_configured_setting("scout.ros.master_uri", ros_settings.get("master_uri"))
     advertise_host = _require_configured_setting("scout.ros.advertise_host", ros_settings.get("advertise_host"))
@@ -92,7 +98,7 @@ WorkingDirectory={workspace_dir}
 Environment=AUTO_SCOUT_WORKSPACE={workspace_dir}
 Environment=AUTO_SCOUT_STORAGE_ROOT={storage_root}
 Environment=AUTO_SCOUT_CONFIG={workspace_dir}/config/scout_config.yaml
-Environment=AUTO_SCOUT_SITE_CONFIG={workspace_dir}/config/site.yaml
+Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
 Environment=AUTO_SCOUT_ROS_MASTER_URI={ros_master_uri}
 Environment=AUTO_SCOUT_ROS_HOSTNAME={advertise_host}
 Environment=AUTO_SCOUT_ODOM_MODEL_TYPE={drive_model}
@@ -107,6 +113,7 @@ WantedBy=multi-user.target
         service_group=service_group,
         workspace_dir=workspace_dir,
         storage_root=storage_root,
+        site_path=remote_site_config_path(workspace_dir),
         ros_master_uri=ros_master_uri,
         advertise_host=advertise_host,
         drive_model=drive_model,
@@ -124,6 +131,19 @@ def _copy_service_to_remote(runner, ssh_config, service_name, content):
     finally:
         os.unlink(local_path)
     return remote_temp
+
+
+def _copy_site_inventory_to_remote(runner, ssh_config, workspace_dir, site_config):
+    remote_path = remote_site_config_path(workspace_dir)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(dump_yaml(site_config))
+        local_path = handle.name
+
+    try:
+        runner.copy_to_remote(ssh_config, local_path, remote_path)
+    finally:
+        os.unlink(local_path)
+    return remote_path
 
 
 def _install_service_commands(service_name, remote_temp_path):
@@ -159,6 +179,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         excludes=SYNC_EXCLUDES,
     )
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
+    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config)
 
     remote_temp = _copy_service_to_remote(runner, target_root, service_name, service_text)
     for command in _install_service_commands(service_name, remote_temp):
@@ -171,6 +192,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         "service_user": service_user,
         "workspace_dir": workspace_dir,
         "host": target_root["host"],
+        "remote_site_path": remote_site_config_path(workspace_dir),
         "dry_run": dry_run,
     }
 
@@ -198,6 +220,7 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         excludes=SYNC_EXCLUDES,
     )
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
+    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config)
 
     remote_temp = _copy_service_to_remote(
         runner,
@@ -216,5 +239,6 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         "workspace_dir": workspace_dir,
         "host": target_root["host"],
         "storage_root": companion_storage_root(companion),
+        "remote_site_path": remote_site_config_path(workspace_dir),
         "dry_run": dry_run,
     }

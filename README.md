@@ -146,10 +146,12 @@ Deployment support is intentionally narrow and now routes through the headless C
 
 The install/deploy path is now designed to be configurable without hand-editing hardcoded usernames and paths.
 
-- Use `./auto-scout configure scout` or `./auto-scout configure companion` to write or update `config/site.yaml`
+- Use `./auto-scout configure scout` or `./auto-scout configure companion` to write or update `config/site_local.yaml`
 - Pass values such as `--ssh-user`, `--ssh-host`, `--workspace-dir`, `--service-user`, `--storage-root`, or `--drive-model` on the CLI when you already know them
 - If you omit those flags in an interactive shell, the CLI prompts you with the current/default value and lets you accept it or replace it
+- The tracked `config/site.yaml` file is now a sample inventory; the default saved local inventory lives in `config/site_local.yaml`
 - Use `--non-interactive` when you want saved values or explicit flags to be used without prompts
+- Use `--skip-connectivity-check` only when you intentionally want to bypass DNS/TCP/SSH validation during offline setup or testing
 - The default Scout workspace now points at `/userdata/catkin_ws/src/auto-scout` so the rooted Scout path does not depend on scarce rootfs space
 - The default Scout-attached LD19 device now points at `/dev/ttyS4`; use `--lidar-device /dev/ttyUSB0` only when the LiDAR is physically attached somewhere else
 - Generated host defaults now use `.invalid` placeholders so a fresh inventory cannot silently deploy against unresolved mDNS assumptions; replace them with real IPs, DNS names, or `.local` values that you know resolve on your network
@@ -191,7 +193,8 @@ Treat the bring-up sequence as:
 - [docs/QUICKSTART.md](docs/QUICKSTART.md): short path to first mapping and patrol tests
 - [config/scout_config.yaml](config/scout_config.yaml): runtime profile, storage policy, and mission settings
 - [check_scout_compatibility.py](check_scout_compatibility.py): canonical validator for repo assumptions, runtime readiness, and mission prerequisites
-- [config/site.yaml](config/site.yaml): reset-era inventory for Scout and companion roles
+- [config/site.yaml](config/site.yaml): tracked sample inventory for Scout and companion roles
+- `config/site_local.yaml`: default saved local inventory written by `./auto-scout configure ...`
 - [config/missions/smoke_loop.yaml](config/missions/smoke_loop.yaml): real-world smoke mission contract
 - [auto-scout](auto-scout): headless deploy, validate, and mission CLI
 - [tools/deploy.sh](tools/deploy.sh): supported Scout deployment entrypoint
@@ -223,7 +226,8 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- global_planner_params.yaml      # GlobalPlanner behavior and cost tuning.
 |   |-- local_costmap_params.yaml       # Local rolling-window costmap configuration.
 |   |-- scout_config.yaml               # Main runtime config covering topics, storage, waypoints, safety, and navigation defaults.
-|   |-- site.yaml                       # Dual-host site inventory for Scout and companion roles.
+|   |-- site.yaml                       # Tracked sample inventory for Scout and companion roles.
+|   |-- site_local.yaml                 # Untracked local inventory written by the configure flow.
 |   `-- missions/                       # Mission definitions invoked through the CLI.
 |       `-- smoke_loop.yaml             # Proof mission that loops rooms, returns, captures media, and notifies.
 |-- container/                          # Companion container build and compose assets.

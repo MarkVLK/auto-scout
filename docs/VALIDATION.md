@@ -2,7 +2,7 @@
 
 `check_scout_compatibility.py` is now the canonical validation entry point for this repo, and `./auto-scout validate ...` is the supported operator-facing wrapper around it.
 
-For install-time configuration, the supported companion and Scout entrypoints are now `./auto-scout configure scout` and `./auto-scout configure companion`. Those commands can prompt for usernames, SSH targets, workspace directories, and storage roots, or accept them via flags for automation.
+For install-time configuration, the supported companion and Scout entrypoints are now `./auto-scout configure scout` and `./auto-scout configure companion`. Those commands can prompt for usernames, SSH targets, SSH auth mode, workspace directories, and storage roots, or accept them via flags for automation. By default they save to `config/site_local.yaml` while leaving tracked `config/site.yaml` as the sample inventory.
 
 It has three modes:
 
@@ -30,7 +30,7 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 
 - README claims that define the companion-first architecture
 - markdown docs for workstation-only absolute links that break on GitHub
-- `config/site.yaml` inventory structure and declared capabilities
+- `config/site.yaml` sample inventory structure and declared capabilities
 - `config/missions/smoke_loop.yaml` mission contract
 - launch file structure for `scout-runtime` and `companion-runtime`
 - service/container files for the reset deployment model
@@ -42,7 +42,7 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 `--mode runtime` checks:
 
 - whether the host looks like a Scout endpoint or a companion computer
-- role declarations in `config/site.yaml`
+- role declarations in the effective site inventory
 - companion storage directories and container stack expectations
 - Scout bridge, motion, camera, and scan capability declarations
 - Scout LiDAR serial-device presence and whether the configured service user can access it

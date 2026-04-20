@@ -5,6 +5,7 @@ import getpass
 import os
 
 from auto_scout.paths import DEFAULT_SITE_CONFIG
+from auto_scout.paths import DEFAULT_SITE_LOCAL_CONFIG
 from auto_scout.yaml_loader import load_yaml, write_yaml
 
 
@@ -13,7 +14,9 @@ DEFAULT_SCOUT_SSH_HOST = "scout-host-or-ip.invalid"
 DEFAULT_COMPANION_SSH_HOST = "companion-host-or-ip.invalid"
 DEFAULT_COMPANION_STORAGE_ROOT = "/srv/auto-scout"
 DEFAULT_SCOUT_DRIVE_MODEL = "diff"
+DEFAULT_SSH_AUTH_MODE = "agent"
 SUPPORTED_DRIVE_MODELS = ("diff", "omni")
+SUPPORTED_SSH_AUTH_MODES = ("agent", "key", "password")
 
 SCOUT_TOPIC_FALLBACKS = {
     "lidar_scan": "lidar_scan",
@@ -78,6 +81,44 @@ def companion_storage_root(role_settings):
     return common_root.rstrip("/")
 
 
+def normalize_drive_model(value, default=DEFAULT_SCOUT_DRIVE_MODEL):
+    """Return a validated Scout drive model."""
+    normalized = str(value or default).strip().lower()
+    if normalized not in SUPPORTED_DRIVE_MODELS:
+        raise ValueError(
+            "Scout drive model must be one of {}.".format(", ".join(SUPPORTED_DRIVE_MODELS))
+        )
+    return normalized
+
+
+def normalize_ssh_auth_mode(value, default=DEFAULT_SSH_AUTH_MODE):
+    """Return a validated SSH auth mode."""
+    normalized = str(value or default).strip().lower()
+    if normalized not in SUPPORTED_SSH_AUTH_MODES:
+        raise ValueError(
+            "SSH auth mode must be one of {}.".format(", ".join(SUPPORTED_SSH_AUTH_MODES))
+        )
+    return normalized
+
+
+def default_ssh_auth_config(mode=DEFAULT_SSH_AUTH_MODE, key_path=""):
+    """Return normalized SSH auth settings."""
+    return {
+        "mode": normalize_ssh_auth_mode(mode),
+        "key_path": str(key_path or ""),
+    }
+
+
+def default_ssh_config(host, user, port=22, auth_mode=DEFAULT_SSH_AUTH_MODE, key_path=""):
+    """Return a complete SSH config mapping."""
+    return {
+        "host": host,
+        "user": user,
+        "port": int(port),
+        "auth": default_ssh_auth_config(auth_mode, key_path=key_path),
+    }
+
+
 def default_site_config():
     """Build a site inventory with environment-aware defaults."""
     companion_user = current_username()
@@ -92,11 +133,7 @@ def default_site_config():
             "scout": {
                 "hostname": "moorebot-scout",
                 "workspace_dir": scout_workspace_for_user(scout_user),
-                "ssh": {
-                    "host": DEFAULT_SCOUT_SSH_HOST,
-                    "user": scout_user,
-                    "port": 22,
-                },
+                "ssh": default_ssh_config(DEFAULT_SCOUT_SSH_HOST, scout_user),
                 "service_user": scout_user,
                 "service_group": scout_user,
                 "ros": {
@@ -141,11 +178,7 @@ def default_site_config():
             "companion": {
                 "hostname": "pi5-companion",
                 "workspace_dir": companion_workspace_for_user(companion_user),
-                "ssh": {
-                    "host": DEFAULT_COMPANION_SSH_HOST,
-                    "user": companion_user,
-                    "port": 22,
-                },
+                "ssh": default_ssh_config(DEFAULT_COMPANION_SSH_HOST, companion_user),
                 "service_user": companion_user,
                 "service_group": companion_user,
                 "host_os": {
@@ -186,23 +219,38 @@ def _deep_merge(base, override):
     return base
 
 
+def resolve_site_write_path(path=None):
+    """Return the site inventory path that should be written by default."""
+    explicit_path = path or os.environ.get("AUTO_SCOUT_SITE_CONFIG")
+    if explicit_path:
+        return str(explicit_path)
+    return str(DEFAULT_SITE_LOCAL_CONFIG)
+
+
+def site_config_layer_paths(path=None):
+    """Return site inventory paths in merge order and the default write target."""
+    explicit_path = path or os.environ.get("AUTO_SCOUT_SITE_CONFIG")
+    if explicit_path:
+        return [str(explicit_path)], str(explicit_path)
+    return [str(DEFAULT_SITE_CONFIG), str(DEFAULT_SITE_LOCAL_CONFIG)], str(DEFAULT_SITE_LOCAL_CONFIG)
+
+
 def load_site_config(path=None):
     """Load the site inventory with defaults applied."""
-    site_path = path or os.environ.get("AUTO_SCOUT_SITE_CONFIG") or str(DEFAULT_SITE_CONFIG)
     config = default_site_config()
-
-    if os.path.isfile(site_path):
+    load_paths, write_path = site_config_layer_paths(path)
+    for site_path in load_paths:
+        if not os.path.isfile(site_path):
+            continue
         loaded = load_yaml(site_path)
         if isinstance(loaded, dict):
             _deep_merge(config, loaded)
-
-    return config, site_path
+    return config, write_path
 
 
 def write_site_config(site_config, path=None):
     """Persist the site inventory to disk."""
-    site_path = path or os.environ.get("AUTO_SCOUT_SITE_CONFIG") or str(DEFAULT_SITE_CONFIG)
-    return write_yaml(site_path, site_config)
+    return write_yaml(resolve_site_write_path(path), site_config)
 
 
 def role_config(site_config, role):
@@ -228,19 +276,16 @@ def role_motion_setting(role_settings, name, default=None):
     return role_settings.get("motion", {}).get(name, default)
 
 
-def normalize_drive_model(value, default=DEFAULT_SCOUT_DRIVE_MODEL):
-    """Return a validated Scout drive model."""
-    normalized = str(value or default).strip().lower()
-    if normalized not in SUPPORTED_DRIVE_MODELS:
-        raise ValueError(
-            "Scout drive model must be one of {}.".format(", ".join(SUPPORTED_DRIVE_MODELS))
-        )
-    return normalized
-
-
 def role_ros_setting(role_settings, name, default=None):
     """Return a role ROS setting."""
     return role_settings.get("ros", {}).get(name, default)
+
+
+def role_ssh_auth(role_settings):
+    """Return normalized SSH auth settings for a role."""
+    ssh = role_settings.get("ssh", {})
+    auth = ssh.get("auth", {})
+    return default_ssh_auth_config(auth.get("mode"), auth.get("key_path", ""))
 
 
 def scout_runtime_topic(site_config, project_config, name, default=None):
@@ -284,6 +329,12 @@ def role_service_identity(role_settings):
     service_user = role_settings.get("service_user") or ssh_user
     service_group = role_settings.get("service_group") or service_user
     return service_user, service_group
+
+
+def remote_site_config_path(workspace_dir):
+    """Return the runtime site inventory path inside a deployed workspace."""
+    normalized = str(workspace_dir or "").rstrip("/")
+    return "{}/config/site_local.yaml".format(normalized)
 
 
 def system_capabilities(site_config):

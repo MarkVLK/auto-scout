@@ -21,9 +21,10 @@ The clean-slate runtime split in this repo is:
 - `scout-runtime` on the rooted Scout
 - `companion-runtime` on the Raspberry Pi 5
 - `auto-scout` as the headless operator CLI
-- `config/site.yaml` as the single inventory for both hosts
+- `config/site.yaml` as the tracked sample inventory for both hosts
+- `config/site_local.yaml` as the default saved local inventory written by the CLI
 
-For open-source use, treat `config/site.yaml` as a generated or user-owned inventory, not a file that should require manual patching to hardcoded usernames. Use `./auto-scout configure scout` and `./auto-scout configure companion` to write it, or pass flags such as `--ssh-user`, `--workspace-dir`, and `--storage-root` directly to `configure` or `deploy`.
+For open-source use, treat `config/site.yaml` as the sample baseline, not the saved live inventory. Use `./auto-scout configure scout` and `./auto-scout configure companion` to write `config/site_local.yaml`, or pass flags such as `--ssh-user`, `--workspace-dir`, and `--storage-root` directly to `configure` or `deploy`.
 Generated host defaults now use `.invalid` placeholders so a new inventory fails visibly until you replace them with working DNS or IP values.
 
 ## 2. Hardware Layout
@@ -108,11 +109,11 @@ Recommended operator flow:
 # Or set them explicitly without prompts
 ./auto-scout configure companion \
   --non-interactive \
-  --ssh-host pi5-host \
+  --ssh-host companion.example.test \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
-  --ros-master-uri http://192.168.0.199:11311 \
-  --advertise-host pi5-host \
+  --ros-master-uri http://192.0.2.10:11311 \
+  --advertise-host companion.example.test \
   --storage-root /srv/auto-scout
 
 # Then deploy

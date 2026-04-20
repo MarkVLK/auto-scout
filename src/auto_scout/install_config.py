@@ -8,6 +8,7 @@ from auto_scout.site_config import (
     companion_storage_root,
     companion_workspace_for_user,
     normalize_drive_model,
+    normalize_ssh_auth_mode,
     role_config,
     scout_workspace_for_user,
 )
@@ -18,6 +19,10 @@ def prompts_enabled(force_prompt=False, non_interactive=False):
     if non_interactive:
         return False
     return force_prompt or sys.stdin.isatty()
+
+
+def _configured_value(value):
+    return bool(str(value or "").strip()) and ".invalid" not in str(value or "")
 
 
 def _prompt(label, default):
@@ -66,17 +71,58 @@ def _default_workspace(role, existing_workspace, old_user, new_user):
     return existing_workspace
 
 
-def configure_role(site_config, role, args, prompt=False):
-    """Return an updated site config for the selected role."""
-    config = deepcopy(site_config)
+def _scout_master_uri_for_host(host):
+    host = str(host or "").strip()
+    if not host:
+        return ""
+    return "http://{}:11311".format(host)
+
+
+def _derived_ros_defaults(config, role):
     role_settings = role_config(config, role)
     ssh_settings = role_settings.setdefault("ssh", {})
+    ssh_host = ssh_settings.get("host")
+    advertise_host = ssh_host or ""
 
-    role_settings["hostname"] = args.hostname or _maybe_prompt(
-        "{} hostname label".format(role.capitalize()),
-        role_settings.get("hostname"),
-        prompt=prompt,
-    )
+    if role == "scout":
+        return {
+            "master_uri": _scout_master_uri_for_host(ssh_host),
+            "advertise_host": advertise_host,
+        }
+
+    scout = role_config(config, "scout")
+    scout_ros = scout.setdefault("ros", {})
+    scout_ssh = scout.setdefault("ssh", {})
+    master_uri = scout_ros.get("master_uri") or _scout_master_uri_for_host(scout_ssh.get("host"))
+    return {
+        "master_uri": master_uri,
+        "advertise_host": advertise_host,
+    }
+
+
+def _preserve_explicit_or_update_default(current_value, old_default, new_default):
+    if not _configured_value(current_value):
+        return new_default
+    if current_value == old_default:
+        return new_default
+    return current_value
+
+
+def configure_role(site_config, role, args, prompt=False, network_only=False):
+    """Return an updated site config for the selected role."""
+    config = deepcopy(site_config)
+    original_config = deepcopy(site_config)
+    role_settings = role_config(config, role)
+    original_role_settings = role_config(original_config, role)
+    ssh_settings = role_settings.setdefault("ssh", {})
+
+    if not network_only:
+        role_settings["hostname"] = args.hostname or _maybe_prompt(
+            "{} hostname label".format(role.capitalize()),
+            role_settings.get("hostname"),
+            prompt=prompt,
+        )
+
     ssh_settings["host"] = args.ssh_host or _maybe_prompt(
         "{} SSH host".format(role.capitalize()),
         ssh_settings.get("host"),
@@ -99,29 +145,71 @@ def configure_role(site_config, role, args, prompt=False):
         else ssh_settings.get("port", 22)
     )
 
-    workspace_default = _default_workspace(
-        role,
-        role_settings.get("workspace_dir"),
-        old_user,
-        ssh_user,
+    auth_settings = ssh_settings.setdefault("auth", {})
+    auth_mode_default = normalize_ssh_auth_mode(auth_settings.get("mode"))
+    auth_mode = (
+        normalize_ssh_auth_mode(args.ssh_auth_mode)
+        if getattr(args, "ssh_auth_mode", None)
+        else _prompt_choice(
+            "{} SSH auth mode".format(role.capitalize()),
+            auth_mode_default,
+            ["agent", "key", "password"],
+        )
+        if prompt
+        else auth_mode_default
     )
-    role_settings["workspace_dir"] = args.workspace_dir or _maybe_prompt(
-        "{} workspace directory".format(role.capitalize()),
-        workspace_default,
-        prompt=prompt,
-    )
+    auth_settings["mode"] = auth_mode
+    if auth_mode == "key":
+        auth_settings["key_path"] = args.ssh_key_path or _maybe_prompt(
+            "{} SSH private key path".format(role.capitalize()),
+            auth_settings.get("key_path"),
+            prompt=prompt,
+        )
+    else:
+        auth_settings["key_path"] = ""
+
+    if not network_only:
+        workspace_default = _default_workspace(
+            role,
+            role_settings.get("workspace_dir"),
+            old_user,
+            ssh_user,
+        )
+        role_settings["workspace_dir"] = args.workspace_dir or _maybe_prompt(
+            "{} workspace directory".format(role.capitalize()),
+            workspace_default,
+            prompt=prompt,
+        )
 
     ros_settings = role_settings.setdefault("ros", {})
+    original_ros = original_role_settings.get("ros", {})
+    old_derived = _derived_ros_defaults(original_config, role)
+    new_derived = _derived_ros_defaults(config, role)
+
+    master_default = _preserve_explicit_or_update_default(
+        original_ros.get("master_uri"),
+        old_derived.get("master_uri"),
+        new_derived.get("master_uri"),
+    )
+    advertise_default = _preserve_explicit_or_update_default(
+        original_ros.get("advertise_host"),
+        old_derived.get("advertise_host"),
+        new_derived.get("advertise_host"),
+    )
+
     ros_settings["master_uri"] = args.ros_master_uri or _maybe_prompt(
         "{} ROS master URI".format(role.capitalize()),
-        ros_settings.get("master_uri"),
+        master_default,
         prompt=prompt,
     )
     ros_settings["advertise_host"] = args.advertise_host or _maybe_prompt(
         "{} ROS advertised host".format(role.capitalize()),
-        ros_settings.get("advertise_host"),
+        advertise_default,
         prompt=prompt,
     )
+
+    if network_only:
+        return config
 
     service_user_default = role_settings.get("service_user") or ssh_user
     role_settings["service_user"] = args.service_user or _maybe_prompt(

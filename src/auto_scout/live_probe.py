@@ -217,12 +217,7 @@ class ProbeExecutor:
             return self.runner.run(command, check=check)
 
         ssh = self.role_settings.get("ssh", {})
-        target = "{}@{}".format(ssh["user"], ssh["host"])
-        port = str(ssh.get("port", 22))
-        return self.runner.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-p", port, target, command],
-            check=check,
-        )
+        return self.runner.run_remote(ssh, command, check=check)
 
 
 def _candidate_topics(role_settings, key):

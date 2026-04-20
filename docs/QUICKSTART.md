@@ -24,11 +24,11 @@ Start with the role-aware validator from this repo:
 ./auto-scout validate system
 ```
 
-Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure [config/site.yaml](../config/site.yaml) reflects what is actually proven on your Scout and Raspberry Pi 5. The shipped sample matches one proven rooted Scout, but live probe results still win.
+Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure `config/site_local.yaml` reflects what is actually proven on your Scout and Raspberry Pi 5. The tracked [config/site.yaml](../config/site.yaml) file is only the sample baseline.
 
 Pay attention to:
 
-- whether `config/site.yaml` matches the real Scout and Raspberry Pi 5 targets
+- whether `config/site_local.yaml` matches the real Scout and Raspberry Pi 5 targets
 - whether pose, motion, notify, and dock capabilities are declared correctly
 - whether the Scout probe found the expected vendor odometry and motion topics
 - whether mapping, patrol, and smoke-loop readiness are reported as `PASS`, `WARN`, or `FAIL`

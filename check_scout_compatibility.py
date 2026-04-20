@@ -24,6 +24,7 @@ from auto_scout.mission_config import load_mission_config
 from auto_scout.live_probe import ProbeExecutor
 from auto_scout.live_probe import probe_scout_capabilities
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
+from auto_scout.network_validation import validate_site_connectivity
 from auto_scout.site_config import load_site_config, normalize_drive_model, role_config, role_motion_setting, role_service_identity
 from auto_scout.yaml_loader import load_yaml
 from config_utils import load_scout_config
@@ -32,6 +33,7 @@ from config_utils import load_scout_config
 README_REQUIRED_STRINGS = [
     "companion-first",
     "config/site.yaml",
+    "config/site_local.yaml",
     "config/missions/smoke_loop.yaml",
     "auto-scout",
     "scout-runtime",
@@ -326,7 +328,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         )
 
     inventory_issues = []
-    raw_site_config = load_yaml(site_path) if Path(site_path).is_file() else {}
+    sample_site_path = REPO_ROOT / "config" / "site.yaml"
+    raw_site_config = load_yaml(sample_site_path) if sample_site_path.is_file() else {}
     if not isinstance(raw_site_config, dict):
         raw_site_config = {}
     for role_name in ["scout", "companion"]:
@@ -361,14 +364,14 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "fail",
             "Site inventory is incomplete",
             details=inventory_issues,
-            evidence={"site_path": site_path},
+            evidence={"site_path": str(sample_site_path)},
         )
     else:
         report.add(
             "repo.inventory_contract",
             "pass",
             "Site inventory provides scout and companion roles with explicit capabilities",
-            evidence={"site_path": site_path},
+            evidence={"site_path": str(sample_site_path)},
         )
 
     mission_issues = []
@@ -501,9 +504,9 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             env = service.get("environment", {})
             if not isinstance(env, dict):
                 container_issues.append("companion-runtime environment must be a mapping")
-            elif env.get("AUTO_SCOUT_SITE_CONFIG") != "/opt/catkin_ws/src/auto-scout/config/site.yaml":
+            elif env.get("AUTO_SCOUT_SITE_CONFIG") != "${AUTO_SCOUT_SITE_CONFIG}":
                 container_issues.append(
-                    "companion-runtime must expose AUTO_SCOUT_SITE_CONFIG for the repo-local site inventory"
+                    "companion-runtime must forward AUTO_SCOUT_SITE_CONFIG into the container"
                 )
             elif env.get("ROS_MASTER_URI") != "${AUTO_SCOUT_ROS_MASTER_URI}":
                 container_issues.append("companion-runtime must source ROS_MASTER_URI from AUTO_SCOUT_ROS_MASTER_URI")
@@ -520,6 +523,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime command must source /opt/ros/melodic/setup.bash")
         if "localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}" not in compose_text:
             container_issues.append("companion-runtime must default localization_mode from AUTO_SCOUT_LOCALIZATION_MODE")
+        if "site_file:=${AUTO_SCOUT_SITE_CONFIG}" not in compose_text:
+            container_issues.append("companion-runtime must launch with AUTO_SCOUT_SITE_CONFIG")
         if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in compose_text:
             container_issues.append("companion-runtime must pass AUTO_SCOUT_ODOM_MODEL_TYPE into the container")
 
@@ -783,7 +788,7 @@ def _add_site_role_checks(report, site_config, site_path, effective_role):
         report.add(
             "runtime.site_contract",
             "fail",
-            "Selected role is not fully described in config/site.yaml",
+            "Selected role is not fully described in the site inventory",
             details=issues,
             evidence={"site_path": site_path},
         )
@@ -791,9 +796,38 @@ def _add_site_role_checks(report, site_config, site_path, effective_role):
         report.add(
             "runtime.site_contract",
             "pass",
-            "config/site.yaml describes the selected runtime role(s)",
+            "The site inventory describes the selected runtime role(s)",
             evidence={"site_path": site_path},
         )
+
+
+def _add_remote_connectivity_check(report, site_config, effective_role, connectivity_check_enabled):
+    roles_to_check = ["scout", "companion"] if effective_role == "system" else [effective_role]
+    if not connectivity_check_enabled:
+        report.add(
+            "runtime.remote_connectivity",
+            "skip",
+            "Remote connectivity validation is disabled",
+        )
+        return
+
+    payload = validate_site_connectivity(site_config, roles_to_check)
+    if payload.get("ok", False):
+        report.add(
+            "runtime.remote_connectivity",
+            "pass",
+            "Configured SSH and ROS endpoints resolved and were reachable",
+            evidence={"roles": payload.get("roles", {})},
+        )
+        return
+
+    report.add(
+        "runtime.remote_connectivity",
+        "fail",
+        "Configured SSH and ROS endpoints were not all reachable",
+        details=payload.get("errors", []),
+        evidence={"roles": payload.get("roles", {})},
+    )
 
 
 def _probe_mismatch_items(probe_result, prefixes):
@@ -1244,10 +1278,21 @@ def _add_mission_checks(report, site_config):
     )
 
 
-def add_runtime_checks(report, site_config, site_path, effective_role, runtime_profile, live_probe_enabled=True, observe_motion=0.0, exercise_cmd_vel=False):
+def add_runtime_checks(
+    report,
+    site_config,
+    site_path,
+    effective_role,
+    runtime_profile,
+    live_probe_enabled=True,
+    observe_motion=0.0,
+    exercise_cmd_vel=False,
+    connectivity_check_enabled=True,
+):
     """Validate local/runtime readiness for the selected role."""
     _add_identity_check(report, effective_role, runtime_profile)
     _add_site_role_checks(report, site_config, site_path, effective_role)
+    _add_remote_connectivity_check(report, site_config, effective_role, connectivity_check_enabled)
     _add_resource_check(report)
 
     if effective_role in ["scout", "system"]:
@@ -1274,9 +1319,10 @@ def build_parser():
     parser = argparse.ArgumentParser(description="Validate Auto-Scout repo and runtime assumptions")
     parser.add_argument("--mode", choices=["repo", "runtime", "all"], default="all")
     parser.add_argument("--role", choices=["auto", "scout", "companion", "system"], default="auto")
-    parser.add_argument("--site", default=str(REPO_ROOT / "config" / "site.yaml"))
+    parser.add_argument("--site", default=None)
     parser.add_argument("--config", default=str(REPO_ROOT / "config" / "scout_config.yaml"))
     parser.add_argument("--no-live-probe", action="store_true", help="Disable live Scout probing")
+    parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
     parser.add_argument("--observe-motion", type=float, default=0.0, help="Observe odometry while manually driving the Scout")
     parser.add_argument("--exercise-cmd-vel", action="store_true", help="Publish a short command on the vendor motion topic during probing")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
@@ -1306,6 +1352,7 @@ def main(argv=None):
             live_probe_enabled=not args.no_live_probe,
             observe_motion=args.observe_motion,
             exercise_cmd_vel=args.exercise_cmd_vel,
+            connectivity_check_enabled=not args.skip_connectivity_check,
         )
 
     payload = report.build()

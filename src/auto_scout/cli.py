@@ -7,16 +7,27 @@ import subprocess
 import sys
 
 from auto_scout.artifacts import ArtifactRun
+from auto_scout.command_runner import CommandRunner
 from auto_scout.deploy import deploy_companion, deploy_scout
 from auto_scout.install_config import configure_role, prompts_enabled
 from auto_scout.live_probe import apply_probe_suggestions, probe_scout_capabilities
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import run_smoke_loop
+from auto_scout.network_validation import role_needs_network_prompt
+from auto_scout.network_validation import validate_site_connectivity
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG, repo_root
 from auto_scout.site_config import load_site_config, role_config, write_site_config
 
 
-def _validator_command(role, site_path, config_path, no_live_probe=False, observe_motion=None, exercise_cmd_vel=False):
+def _validator_command(
+    role,
+    site_path,
+    config_path,
+    no_live_probe=False,
+    observe_motion=None,
+    exercise_cmd_vel=False,
+    skip_connectivity_check=False,
+):
     mode = "all" if role == "system" else "runtime"
     command = [
         sys.executable,
@@ -37,10 +48,21 @@ def _validator_command(role, site_path, config_path, no_live_probe=False, observ
         command.extend(["--observe-motion", str(observe_motion)])
     if exercise_cmd_vel:
         command.append("--exercise-cmd-vel")
+    if skip_connectivity_check:
+        command.append("--skip-connectivity-check")
     return command
 
 
-def _run_validator(role, site_path, config_path, artifact_run, no_live_probe=False, observe_motion=None, exercise_cmd_vel=False):
+def _run_validator(
+    role,
+    site_path,
+    config_path,
+    artifact_run,
+    no_live_probe=False,
+    observe_motion=None,
+    exercise_cmd_vel=False,
+    skip_connectivity_check=False,
+):
     command = _validator_command(
         role,
         site_path,
@@ -48,6 +70,7 @@ def _run_validator(role, site_path, config_path, artifact_run, no_live_probe=Fal
         no_live_probe=no_live_probe,
         observe_motion=observe_motion,
         exercise_cmd_vel=exercise_cmd_vel,
+        skip_connectivity_check=skip_connectivity_check,
     )
     artifact_run.log("$ {}".format(" ".join(command)))
     completed = subprocess.run(
@@ -70,6 +93,13 @@ def _add_role_config_arguments(parser):
     parser.add_argument("--ssh-host", default=None, help="SSH host or IP for the selected role")
     parser.add_argument("--ssh-user", default=None, help="SSH username for the selected role")
     parser.add_argument("--ssh-port", type=int, default=None, help="SSH port for the selected role")
+    parser.add_argument(
+        "--ssh-auth-mode",
+        choices=["agent", "key", "password"],
+        default=None,
+        help="SSH auth mode for the selected role",
+    )
+    parser.add_argument("--ssh-key-path", default=None, help="SSH private key path for key-based auth")
     parser.add_argument("--workspace-dir", default=None, help="Remote workspace directory for the selected role")
     parser.add_argument("--ros-master-uri", default=None, help="ROS master URI for the selected role")
     parser.add_argument("--advertise-host", default=None, help="ROS advertised host or IP for the selected role")
@@ -86,6 +116,11 @@ def _add_role_config_arguments(parser):
         help="Do not prompt; use CLI flags or saved site defaults",
     )
     parser.add_argument(
+        "--skip-connectivity-check",
+        action="store_true",
+        help="Skip DNS/TCP/SSH reachability checks for this command",
+    )
+    parser.add_argument(
         "--write-site",
         dest="write_site",
         action="store_true",
@@ -100,7 +135,31 @@ def _add_role_config_arguments(parser):
     )
 
 
-def _resolve_site_config(parser, base_site_config, site_path, args, role):
+def _blank_role_args():
+    return argparse.Namespace(
+        hostname=None,
+        ssh_host=None,
+        ssh_user=None,
+        ssh_port=None,
+        ssh_auth_mode=None,
+        ssh_key_path=None,
+        workspace_dir=None,
+        ros_master_uri=None,
+        advertise_host=None,
+        service_user=None,
+        service_group=None,
+        storage_root=None,
+        camera_device=None,
+        lidar_device=None,
+        drive_model=None,
+        prompt=False,
+        non_interactive=False,
+        write_site=True,
+        skip_connectivity_check=False,
+    )
+
+
+def _apply_role_configuration(parser, base_site_config, args, role):
     if getattr(args, "prompt", False) and getattr(args, "non_interactive", False):
         parser.error("--prompt and --non-interactive cannot be used together")
 
@@ -109,11 +168,62 @@ def _resolve_site_config(parser, base_site_config, site_path, args, role):
         non_interactive=getattr(args, "non_interactive", False),
     )
     configured = configure_role(base_site_config, role, args, prompt=prompt)
-
-    if getattr(args, "write_site", False):
-        write_site_config(configured, site_path)
-
     return configured, prompt
+
+
+def _command_roles(args):
+    if args.command == "validate":
+        return ["scout", "companion"] if args.role == "system" else [args.role]
+    if args.command == "probe":
+        return ["scout"]
+    if args.command == "run":
+        return ["companion"]
+    return [args.role]
+
+
+def _prompt_missing_network_roles(site_config, args, roles):
+    prompt = prompts_enabled(
+        force_prompt=False,
+        non_interactive=getattr(args, "non_interactive", False),
+    )
+    if not prompt:
+        return site_config, False
+
+    updated = site_config
+    prompted = False
+    for role_name in roles:
+        if not role_needs_network_prompt(role_config(updated, role_name)):
+            continue
+        updated = configure_role(updated, role_name, _blank_role_args(), prompt=True, network_only=True)
+        prompted = True
+    return updated, prompted
+
+
+def _fail_connectivity(payload):
+    lines = payload.get("errors", [])
+    raise ValueError("Connectivity validation failed:\n- {}".format("\n- ".join(lines)))
+
+
+def _validate_connectivity(site_config, roles, artifact_run, skip=False):
+    if skip:
+        return
+    payload = validate_site_connectivity(
+        site_config,
+        roles,
+        runner=CommandRunner(artifact_run=artifact_run),
+    )
+    if not payload.get("ok", False):
+        _fail_connectivity(payload)
+
+
+def _write_site_if_requested(site_config, site_path, should_write):
+    if should_write:
+        write_site_config(site_config, site_path)
+
+
+def _emit_json(payload, artifact_run, filename):
+    artifact_run.write_json(filename, payload)
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def build_parser():
@@ -136,6 +246,7 @@ def build_parser():
     validate_parser = subparsers.add_parser("validate", help="Run role-aware validation")
     validate_parser.add_argument("role", choices=["scout", "companion", "system"])
     validate_parser.add_argument("--no-live-probe", action="store_true", help="Disable live Scout probing")
+    validate_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
     validate_parser.add_argument(
         "--observe-motion",
         type=float,
@@ -150,6 +261,7 @@ def build_parser():
 
     probe_parser = subparsers.add_parser("probe", help="Probe the live Scout ROS surface")
     probe_parser.add_argument("role", choices=["scout"])
+    probe_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
     probe_parser.add_argument(
         "--observe-motion",
         type=float,
@@ -179,6 +291,7 @@ def build_parser():
     run_parser.add_argument("mission", choices=["smoke-loop"])
     run_parser.add_argument("--mission-file", default=None, help="Explicit mission YAML path")
     run_parser.add_argument("--dry-run", action="store_true")
+    run_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
 
     return parser
 
@@ -193,7 +306,26 @@ def main(argv=None):
     artifact_run = ArtifactRun(artifact_name)
 
     if args.command == "configure":
-        configured_site_config, prompted = _resolve_site_config(parser, site_config, site_path, args, args.role)
+        try:
+            configured_site_config, prompted = _apply_role_configuration(parser, site_config, args, args.role)
+            _validate_connectivity(
+                configured_site_config,
+                [args.role],
+                artifact_run,
+                skip=args.skip_connectivity_check,
+            )
+            _write_site_if_requested(configured_site_config, site_path, bool(args.write_site))
+        except (RuntimeError, ValueError) as exc:
+            payload = {
+                "ok": False,
+                "role": args.role,
+                "error": str(exc),
+                "site_path": site_path,
+                "write_site": bool(args.write_site),
+            }
+            _emit_json(payload, artifact_run, "configure-report.json")
+            return 1
+
         payload = {
             "ok": True,
             "role": args.role,
@@ -202,41 +334,47 @@ def main(argv=None):
             "write_site": bool(args.write_site),
             "settings": role_config(configured_site_config, args.role),
         }
-        artifact_run.write_json("configure-report.json", payload)
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _emit_json(payload, artifact_run, "configure-report.json")
         return 0
 
     if args.command == "deploy":
         original_write_site = args.write_site
         args.write_site = bool(args.write_site and not args.dry_run)
-        effective_site_config, prompted = _resolve_site_config(parser, site_config, site_path, args, args.role)
-        args.write_site = original_write_site
         try:
+            effective_site_config, prompted = _apply_role_configuration(parser, site_config, args, args.role)
+            _validate_connectivity(
+                effective_site_config,
+                [args.role],
+                artifact_run,
+                skip=args.skip_connectivity_check,
+            )
+            _write_site_if_requested(effective_site_config, site_path, bool(args.write_site))
             if args.role == "scout":
                 result = deploy_scout(effective_site_config, artifact_run, dry_run=args.dry_run)
             else:
                 result = deploy_companion(effective_site_config, artifact_run, dry_run=args.dry_run)
-        except ValueError as exc:
+        except (RuntimeError, ValueError) as exc:
             result = {
                 "ok": False,
                 "role": args.role,
                 "error": str(exc),
                 "dry_run": args.dry_run,
             }
-            result["prompted"] = prompted
+            result["prompted"] = False
             result["site_path"] = site_path
             result["write_site"] = bool(original_write_site and not args.dry_run)
-            artifact_run.write_json("deploy-report.json", result)
-            print(json.dumps(result, indent=2, sort_keys=True))
+            _emit_json(result, artifact_run, "deploy-report.json")
             return 1
         result["prompted"] = prompted
         result["site_path"] = site_path
         result["write_site"] = bool(original_write_site and not args.dry_run)
-        artifact_run.write_json("deploy-report.json", result)
-        print(json.dumps(result, indent=2, sort_keys=True))
+        _emit_json(result, artifact_run, "deploy-report.json")
         return 0
 
     if args.command == "validate":
+        effective_site_config, prompted = _prompt_missing_network_roles(site_config, args, _command_roles(args))
+        if prompted:
+            _write_site_if_requested(effective_site_config, site_path, True)
         report = _run_validator(
             args.role,
             site_path,
@@ -245,41 +383,82 @@ def main(argv=None):
             no_live_probe=args.no_live_probe,
             observe_motion=args.observe_motion,
             exercise_cmd_vel=args.exercise_cmd_vel,
+            skip_connectivity_check=args.skip_connectivity_check,
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report.get("summary", {}).get("ok", False) else 1
 
     if args.command == "probe":
-        result = probe_scout_capabilities(
-            site_config,
-            observe_motion_seconds=args.observe_motion,
-            exercise_cmd_vel=args.exercise_cmd_vel,
-            artifact_run=artifact_run,
-        )
+        try:
+            effective_site_config, prompted = _prompt_missing_network_roles(site_config, args, ["scout"])
+            _validate_connectivity(
+                effective_site_config,
+                ["scout"],
+                artifact_run,
+                skip=args.skip_connectivity_check,
+            )
+            if prompted:
+                _write_site_if_requested(effective_site_config, site_path, True)
+            result = probe_scout_capabilities(
+                effective_site_config,
+                observe_motion_seconds=args.observe_motion,
+                exercise_cmd_vel=args.exercise_cmd_vel,
+                artifact_run=artifact_run,
+            )
+        except (RuntimeError, ValueError) as exc:
+            payload = {
+                "ok": False,
+                "phase": "connectivity",
+                "error": str(exc),
+                "site_path": site_path,
+                "write_site": False,
+            }
+            _emit_json(payload, artifact_run, "probe-report.json")
+            return 1
+
         if args.write_site:
-            updated_site_config = apply_probe_suggestions(site_config, result)
+            updated_site_config = apply_probe_suggestions(effective_site_config, result)
             write_site_config(updated_site_config, site_path)
             result["site_path"] = site_path
             result["write_site"] = True
         else:
             result["site_path"] = site_path
             result["write_site"] = False
-        artifact_run.write_json("probe-report.json", result)
-        print(json.dumps(result, indent=2, sort_keys=True))
+        _emit_json(result, artifact_run, "probe-report.json")
         return 0 if result.get("ok", False) else 1
 
     mission_name = "smoke_loop" if args.mission == "smoke-loop" else args.mission
     mission_config, mission_path = load_mission_config(args.mission_file or mission_name)
-    result = run_smoke_loop(
-        site_config,
-        site_path,
-        mission_config,
-        mission_path,
-        artifact_run,
-        dry_run=args.dry_run,
-    )
-    artifact_run.write_json("mission-report.json", result)
-    print(json.dumps(result, indent=2, sort_keys=True))
+    try:
+        effective_site_config, prompted = _prompt_missing_network_roles(site_config, args, ["companion"])
+        _validate_connectivity(
+            effective_site_config,
+            ["companion"],
+            artifact_run,
+            skip=args.skip_connectivity_check,
+        )
+        if prompted:
+            _write_site_if_requested(effective_site_config, site_path, True)
+        result = run_smoke_loop(
+            effective_site_config,
+            site_path,
+            mission_config,
+            mission_path,
+            artifact_run,
+            dry_run=args.dry_run,
+        )
+    except (RuntimeError, ValueError) as exc:
+        payload = {
+            "ok": False,
+            "phase": "connectivity",
+            "error": str(exc),
+            "mission_path": mission_path,
+            "site_path": site_path,
+            "dry_run": args.dry_run,
+        }
+        _emit_json(payload, artifact_run, "mission-report.json")
+        return 1
+    _emit_json(result, artifact_run, "mission-report.json")
     return 0 if result.get("ok", False) else 1
 
 
