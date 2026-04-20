@@ -13,12 +13,7 @@ RUN apt-get update && apt-get install -y \
     gnupg2 \
     lsb-release \
     python \
-    python-catkin-tools \
     python-requests \
-    python-rosdep \
-    python-rosinstall \
-    python-rosinstall-generator \
-    python-vcstools \
     build-essential \
     rsync \
  && rm -rf /var/lib/apt/lists/*
@@ -27,6 +22,11 @@ RUN curl -sSL 'https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc' |
  && echo 'deb http://packages.ros.org/ros/ubuntu bionic main' > /etc/apt/sources.list.d/ros1.list \
  && apt-get update \
  && apt-get install -y \
+    python-catkin-tools \
+    python-rosdep \
+    python-rosinstall \
+    python-rosinstall-generator \
+    python-vcstools \
     ros-melodic-ros-base \
     ros-melodic-gmapping \
     ros-melodic-amcl \
