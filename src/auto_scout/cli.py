@@ -78,6 +78,7 @@ def _add_role_config_arguments(parser):
     parser.add_argument("--storage-root", default=None, help="Companion storage root; maps/media/events live under it")
     parser.add_argument("--camera-device", default=None, help="Scout camera device path")
     parser.add_argument("--lidar-device", default=None, help="Scout lidar device path")
+    parser.add_argument("--drive-model", choices=["diff", "omni"], default=None, help="Scout drive model for AMCL")
     parser.add_argument("--prompt", action="store_true", help="Prompt for configurable values before continuing")
     parser.add_argument(
         "--non-interactive",
@@ -210,10 +211,24 @@ def main(argv=None):
         args.write_site = bool(args.write_site and not args.dry_run)
         effective_site_config, prompted = _resolve_site_config(parser, site_config, site_path, args, args.role)
         args.write_site = original_write_site
-        if args.role == "scout":
-            result = deploy_scout(effective_site_config, artifact_run, dry_run=args.dry_run)
-        else:
-            result = deploy_companion(effective_site_config, artifact_run, dry_run=args.dry_run)
+        try:
+            if args.role == "scout":
+                result = deploy_scout(effective_site_config, artifact_run, dry_run=args.dry_run)
+            else:
+                result = deploy_companion(effective_site_config, artifact_run, dry_run=args.dry_run)
+        except ValueError as exc:
+            result = {
+                "ok": False,
+                "role": args.role,
+                "error": str(exc),
+                "dry_run": args.dry_run,
+            }
+            result["prompted"] = prompted
+            result["site_path"] = site_path
+            result["write_site"] = bool(original_write_site and not args.dry_run)
+            artifact_run.write_json("deploy-report.json", result)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 1
         result["prompted"] = prompted
         result["site_path"] = site_path
         result["write_site"] = bool(original_write_site and not args.dry_run)

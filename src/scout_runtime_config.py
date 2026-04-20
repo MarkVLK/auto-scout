@@ -9,10 +9,11 @@ import sys
 
 
 DEFAULT_SCOUT_SSH_USER = "linaro"
-DEFAULT_SCOUT_SSH_HOST = "moorebot-scout.local"
+DEFAULT_SCOUT_SSH_HOST = "scout-host-or-ip.invalid"
 DEFAULT_SCOUT_WORKSPACE = "/userdata/catkin_ws/src/auto-scout"
 DEFAULT_CAMERA_DEVICE = "/dev/video0"
 DEFAULT_LIDAR_DEVICE = "/dev/ttyS4"
+DEFAULT_SCOUT_DRIVE_MODEL = "diff"
 
 SCOUT_TOPIC_FALLBACKS = {
     "lidar_scan": "lidar_scan",
@@ -167,6 +168,7 @@ def default_site_config():
                 },
                 "motion": {
                     "forward_axis": "y",
+                    "drive_model": DEFAULT_SCOUT_DRIVE_MODEL,
                 },
                 "adapters": {
                     "motion": "rollereye_or_vendor_bridge",

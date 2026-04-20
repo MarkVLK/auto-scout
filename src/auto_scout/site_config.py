@@ -9,9 +9,11 @@ from auto_scout.yaml_loader import load_yaml, write_yaml
 
 
 DEFAULT_SCOUT_SSH_USER = "linaro"
-DEFAULT_SCOUT_SSH_HOST = "moorebot-scout.local"
-DEFAULT_COMPANION_SSH_HOST = "auto-scout-pi5.local"
+DEFAULT_SCOUT_SSH_HOST = "scout-host-or-ip.invalid"
+DEFAULT_COMPANION_SSH_HOST = "companion-host-or-ip.invalid"
 DEFAULT_COMPANION_STORAGE_ROOT = "/srv/auto-scout"
+DEFAULT_SCOUT_DRIVE_MODEL = "diff"
+SUPPORTED_DRIVE_MODELS = ("diff", "omni")
 
 SCOUT_TOPIC_FALLBACKS = {
     "lidar_scan": "lidar_scan",
@@ -116,6 +118,7 @@ def default_site_config():
                 },
                 "motion": {
                     "forward_axis": "y",
+                    "drive_model": DEFAULT_SCOUT_DRIVE_MODEL,
                 },
                 "adapters": {
                     "motion": "rollereye_or_vendor_bridge",
@@ -225,6 +228,16 @@ def role_motion_setting(role_settings, name, default=None):
     return role_settings.get("motion", {}).get(name, default)
 
 
+def normalize_drive_model(value, default=DEFAULT_SCOUT_DRIVE_MODEL):
+    """Return a validated Scout drive model."""
+    normalized = str(value or default).strip().lower()
+    if normalized not in SUPPORTED_DRIVE_MODELS:
+        raise ValueError(
+            "Scout drive model must be one of {}.".format(", ".join(SUPPORTED_DRIVE_MODELS))
+        )
+    return normalized
+
+
 def role_ros_setting(role_settings, name, default=None):
     """Return a role ROS setting."""
     return role_settings.get("ros", {}).get(name, default)
@@ -257,6 +270,12 @@ def scout_motion_axis(site_config, default="y"):
     """Return the configured Scout forward axis."""
     scout = role_config(site_config, "scout")
     return role_motion_setting(scout, "forward_axis", default)
+
+
+def scout_drive_model(site_config, default=DEFAULT_SCOUT_DRIVE_MODEL):
+    """Return the configured Scout drive model."""
+    scout = role_config(site_config, "scout")
+    return normalize_drive_model(role_motion_setting(scout, "drive_model", default), default)
 
 
 def role_service_identity(role_settings):

@@ -166,6 +166,7 @@ def _parse_motion_csv(text):
             "delta_y": 0.0,
             "delta_z": 0.0,
             "distance": 0.0,
+            "dominant_axis": "none",
             "moved": False,
         }
 
@@ -173,12 +174,22 @@ def _parse_motion_csv(text):
     delta_y = rows[-1]["y"] - rows[0]["y"]
     delta_z = rows[-1]["z"] - rows[0]["z"]
     distance = math.sqrt((delta_x ** 2) + (delta_y ** 2))
+    abs_x = abs(delta_x)
+    abs_y = abs(delta_y)
+    dominant_axis = "mixed"
+    if max(abs_x, abs_y) < MOTION_DELTA_THRESHOLD:
+        dominant_axis = "none"
+    elif abs_x >= abs_y * 2:
+        dominant_axis = "x"
+    elif abs_y >= abs_x * 2:
+        dominant_axis = "y"
     return {
         "samples": len(rows),
         "delta_x": delta_x,
         "delta_y": delta_y,
         "delta_z": delta_z,
         "distance": distance,
+        "dominant_axis": dominant_axis,
         "moved": distance >= MOTION_DELTA_THRESHOLD or abs(delta_z) >= MOTION_DELTA_THRESHOLD,
     }
 

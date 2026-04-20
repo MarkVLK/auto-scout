@@ -7,6 +7,7 @@ from auto_scout.site_config import (
     companion_storage_paths,
     companion_storage_root,
     companion_workspace_for_user,
+    normalize_drive_model,
     role_config,
     scout_workspace_for_user,
 )
@@ -32,6 +33,15 @@ def _prompt_int(label, default):
             return int(value)
         except (TypeError, ValueError):
             print("Please enter an integer value.")
+
+
+def _prompt_choice(label, default, choices):
+    normalized_choices = [str(item).lower() for item in choices]
+    while True:
+        value = str(_prompt(label, default)).strip().lower()
+        if value in normalized_choices:
+            return value
+        print("Please choose one of: {}.".format(", ".join(normalized_choices)))
 
 
 def _maybe_prompt(label, default, prompt=False, cast=None):
@@ -137,6 +147,7 @@ def configure_role(site_config, role, args, prompt=False):
         role_settings["storage"] = companion_storage_paths(storage_root)
     else:
         devices = role_settings.setdefault("devices", {})
+        motion = role_settings.setdefault("motion", {})
         devices["camera"] = args.camera_device or _maybe_prompt(
             "Scout camera device",
             devices.get("camera", "/dev/video0"),
@@ -147,5 +158,15 @@ def configure_role(site_config, role, args, prompt=False):
             devices.get("lidar", "/dev/ttyS4"),
             prompt=prompt,
         )
+        if args.drive_model:
+            motion["drive_model"] = normalize_drive_model(args.drive_model)
+        elif prompt:
+            motion["drive_model"] = _prompt_choice(
+                "Scout drive model (diff or omni)",
+                motion.get("drive_model", "diff"),
+                ["diff", "omni"],
+            )
+        else:
+            motion["drive_model"] = normalize_drive_model(motion.get("drive_model"))
 
     return config

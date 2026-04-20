@@ -11,6 +11,7 @@
 
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml"/>
   <arg name="autonomy_cmd_vel" default="/scout/cmd_vel_companion"/>
+  <arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>
 
   <node name="map_file_guard" pkg="auto-scout" type="map_file_guard.py" output="screen" required="true">
     <param name="map_file" value="$(arg map_file)"/>
@@ -44,11 +45,12 @@
     <param name="laser_likelihood_max_dist" value="2.0"/>
     <param name="laser_model_type" value="likelihood_field"/>
 
-    <param name="odom_model_type" value="diff"/>
+    <param name="odom_model_type" value="$(arg odom_model_type)"/>
     <param name="odom_alpha1" value="0.2"/>
     <param name="odom_alpha2" value="0.2"/>
     <param name="odom_alpha3" value="0.2"/>
     <param name="odom_alpha4" value="0.2"/>
+    <param name="odom_alpha5" value="0.2"/>
     <param name="odom_frame_id" value="odom"/>
     <param name="base_frame_id" value="base_link"/>
     <param name="global_frame_id" value="map"/>

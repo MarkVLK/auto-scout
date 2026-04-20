@@ -23,6 +23,7 @@ RUN curl -sSL 'https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc' |
  && apt-get update \
  && apt-get install -y \
     python-catkin-tools \
+    python-opencv \
     python-rosdep \
     python-rosinstall \
     python-rosinstall-generator \

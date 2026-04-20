@@ -95,6 +95,10 @@ class LiveProbeTest(unittest.TestCase):
         self.assertTrue(result["inferred_capabilities"]["pose"])
         self.assertTrue(result["inferred_capabilities"]["motion"])
         self.assertEqual(result["config_mismatch_suggestions"], [])
+        self.assertEqual(result["observed"]["command_exercise"]["forward_axis"], "y")
+        self.assertEqual(result["observed"]["command_exercise"]["dominant_axis"], "x")
+        self.assertGreater(result["observed"]["command_exercise"]["delta_x"], 0.0)
+        self.assertGreater(result["observed"]["command_exercise"]["delta_x"], result["observed"]["command_exercise"]["delta_y"])
 
     def test_probe_suggests_ttys4_and_vio_odom_when_defaults_are_wrong(self):
         site_config = default_site_config()

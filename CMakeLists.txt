@@ -29,9 +29,6 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
 )
 
-## System dependencies are found with CMake's conventions
-find_package(OpenCV REQUIRED)
-
 ## The catkin_package macro generates cmake config files for your package
 catkin_package(
   CATKIN_DEPENDS
@@ -64,7 +61,6 @@ catkin_package(
 ## Specify additional locations of header files
 include_directories(
   ${catkin_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
 )
 
 ## Mark executable scripts (Python etc.) for installation

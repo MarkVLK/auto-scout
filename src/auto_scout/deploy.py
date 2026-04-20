@@ -5,7 +5,7 @@ import tempfile
 
 from auto_scout.command_runner import CommandRunner
 from auto_scout.paths import repo_root
-from auto_scout.site_config import companion_storage_root, role_config, role_service_identity
+from auto_scout.site_config import companion_storage_root, normalize_drive_model, role_config, role_motion_setting, role_service_identity
 
 
 SYNC_EXCLUDES = [
@@ -17,13 +17,23 @@ SYNC_EXCLUDES = [
 ]
 
 
+def _require_configured_setting(setting_name, value):
+    value = str(value or "").strip()
+    if not value:
+        raise ValueError("{} must be set before deploy.".format(setting_name))
+    if ".invalid" in value:
+        raise ValueError("{} is still using the generated placeholder '{}'.".format(setting_name, value))
+    return value
+
+
 def _render_scout_service(role_settings):
     workspace_dir = role_settings["workspace_dir"]
     service_user, service_group = role_service_identity(role_settings)
     config_path = "{}/config/scout_config.yaml".format(workspace_dir)
     site_path = "{}/config/site.yaml".format(workspace_dir)
-    ros_master_uri = role_settings.get("ros", {}).get("master_uri", "http://moorebot-scout.local:11311")
-    advertise_host = role_settings.get("ros", {}).get("advertise_host", "localhost")
+    ros_settings = role_settings.get("ros", {})
+    ros_master_uri = _require_configured_setting("scout.ros.master_uri", ros_settings.get("master_uri"))
+    advertise_host = _require_configured_setting("scout.ros.advertise_host", ros_settings.get("advertise_host"))
 
     return """[Unit]
 Description=Auto-Scout scout runtime
@@ -59,13 +69,14 @@ WantedBy=multi-user.target
     )
 
 
-def _render_companion_service(role_settings):
+def _render_companion_service(role_settings, scout_role_settings):
     workspace_dir = role_settings["workspace_dir"]
     service_user, service_group = role_service_identity(role_settings)
     storage_root = companion_storage_root(role_settings)
     ros_settings = role_settings.get("ros", {})
-    ros_master_uri = ros_settings.get("master_uri", "http://moorebot-scout.local:11311")
-    advertise_host = ros_settings.get("advertise_host", "auto-scout-pi5.local")
+    ros_master_uri = _require_configured_setting("companion.ros.master_uri", ros_settings.get("master_uri"))
+    advertise_host = _require_configured_setting("companion.ros.advertise_host", ros_settings.get("advertise_host"))
+    drive_model = normalize_drive_model(role_motion_setting(scout_role_settings, "drive_model"))
 
     return """[Unit]
 Description=Auto-Scout companion runtime
@@ -84,6 +95,7 @@ Environment=AUTO_SCOUT_CONFIG={workspace_dir}/config/scout_config.yaml
 Environment=AUTO_SCOUT_SITE_CONFIG={workspace_dir}/config/site.yaml
 Environment=AUTO_SCOUT_ROS_MASTER_URI={ros_master_uri}
 Environment=AUTO_SCOUT_ROS_HOSTNAME={advertise_host}
+Environment=AUTO_SCOUT_ODOM_MODEL_TYPE={drive_model}
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh up'
 ExecStop=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh down'
 TimeoutStartSec=0
@@ -97,6 +109,7 @@ WantedBy=multi-user.target
         storage_root=storage_root,
         ros_master_uri=ros_master_uri,
         advertise_host=advertise_host,
+        drive_model=drive_model,
     )
 
 
@@ -136,6 +149,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
     service_name = "auto-scout-scout-runtime.service"
     target_root = scout["ssh"]
     service_user, service_group = role_service_identity(scout)
+    service_text = _render_scout_service(scout)
 
     _prepare_remote_workspace(runner, target_root, workspace_dir, service_user, service_group)
     runner.rsync_to_remote(
@@ -146,7 +160,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
     )
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
 
-    remote_temp = _copy_service_to_remote(runner, target_root, service_name, _render_scout_service(scout))
+    remote_temp = _copy_service_to_remote(runner, target_root, service_name, service_text)
     for command in _install_service_commands(service_name, remote_temp):
         runner.run_remote(target_root, command)
 
@@ -164,12 +178,14 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
 def deploy_companion(site_config, artifact_run, dry_run=False):
     """Sync the repo, prepare storage, and start the containerized companion stack."""
     runner = CommandRunner(artifact_run=artifact_run, dry_run=dry_run)
+    scout = role_config(site_config, "scout")
     companion = role_config(site_config, "companion")
     workspace_dir = companion["workspace_dir"]
     target_root = companion["ssh"]
     storage = companion.get("storage", {})
     service_name = "auto-scout-companion-runtime.service"
     service_user, service_group = role_service_identity(companion)
+    service_text = _render_companion_service(companion, scout)
 
     _prepare_remote_workspace(runner, target_root, workspace_dir, service_user, service_group)
     for path in storage.values():
@@ -187,7 +203,7 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         runner,
         target_root,
         service_name,
-        _render_companion_service(companion),
+        service_text,
     )
     for command in _install_service_commands(service_name, remote_temp):
         runner.run_remote(target_root, command)

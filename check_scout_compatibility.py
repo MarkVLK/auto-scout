@@ -24,7 +24,7 @@ from auto_scout.mission_config import load_mission_config
 from auto_scout.live_probe import ProbeExecutor
 from auto_scout.live_probe import probe_scout_capabilities
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
-from auto_scout.site_config import load_site_config, role_config, role_service_identity
+from auto_scout.site_config import load_site_config, normalize_drive_model, role_config, role_motion_setting, role_service_identity
 from auto_scout.yaml_loader import load_yaml
 from config_utils import load_scout_config
 
@@ -60,6 +60,8 @@ STATIC_PYTHON_DIRS = [
 ]
 
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+NATIVE_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp")
+PLACEHOLDER_MARKER = ".invalid"
 
 
 def run_command(command):
@@ -202,6 +204,21 @@ def find_local_markdown_link_targets(root_path):
     return issues
 
 
+def _is_generated_placeholder(value):
+    return PLACEHOLDER_MARKER in str(value or "")
+
+
+def _native_source_uses_opencv(path):
+    text = path.read_text(encoding="utf-8")
+    patterns = [
+        "#include <opencv",
+        "#include \"opencv",
+        "cv::",
+        "opencv2/",
+    ]
+    return any(item in text for item in patterns)
+
+
 def _parse_mode_bits(mode_text):
     if not mode_text or len(mode_text) != 3 or not mode_text.isdigit():
         return None
@@ -309,6 +326,9 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         )
 
     inventory_issues = []
+    raw_site_config = load_yaml(site_path) if Path(site_path).is_file() else {}
+    if not isinstance(raw_site_config, dict):
+        raw_site_config = {}
     for role_name in ["scout", "companion"]:
         role = site_config.get("roles", {}).get(role_name)
         if not isinstance(role, dict):
@@ -321,6 +341,17 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             inventory_issues.append("role '{}' is missing workspace_dir".format(role_name))
         if "capabilities" not in role:
             inventory_issues.append("role '{}' is missing capabilities".format(role_name))
+
+    scout_motion = site_config.get("roles", {}).get("scout", {}).get("motion", {})
+    raw_roles = raw_site_config.get("roles", {}) if isinstance(raw_site_config.get("roles", {}), dict) else {}
+    raw_scout = raw_roles.get("scout", {}) if isinstance(raw_roles.get("scout", {}), dict) else {}
+    raw_scout_motion = raw_scout.get("motion", {}) if isinstance(raw_scout.get("motion", {}), dict) else {}
+    try:
+        normalize_drive_model(scout_motion.get("drive_model"))
+    except ValueError as exc:
+        inventory_issues.append(str(exc))
+    if "drive_model" not in raw_scout_motion:
+        inventory_issues.append("config/site.yaml must explicitly set roles.scout.motion.drive_model")
 
     smoke_mission, mission_path = load_mission_config("smoke_loop")
     gate = evaluate_smoke_loop_gate(site_config, smoke_mission)
@@ -403,6 +434,12 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             if resolved and not resolved.is_file():
                 launch_issues.append("{} includes missing file {}".format(relative_path, resolved))
 
+    navigation_text = (REPO_ROOT / "launch" / "navigation.launch").read_text(encoding="utf-8")
+    if 'name="odom_model_type"' not in navigation_text or "AUTO_SCOUT_ODOM_MODEL_TYPE" not in navigation_text:
+        launch_issues.append("launch/navigation.launch must expose odom_model_type from AUTO_SCOUT_ODOM_MODEL_TYPE")
+    if 'name="odom_alpha5"' not in navigation_text:
+        launch_issues.append("launch/navigation.launch must set odom_alpha5 for omni motion support")
+
     if launch_issues:
         report.add(
             "repo.launch_contract",
@@ -472,6 +509,10 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                 container_issues.append("companion-runtime must source ROS_MASTER_URI from AUTO_SCOUT_ROS_MASTER_URI")
             elif env.get("ROS_HOSTNAME") != "${AUTO_SCOUT_ROS_HOSTNAME}":
                 container_issues.append("companion-runtime must source ROS_HOSTNAME from AUTO_SCOUT_ROS_HOSTNAME")
+            elif env.get("AUTO_SCOUT_ODOM_MODEL_TYPE") != "${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}":
+                container_issues.append(
+                    "companion-runtime must expose AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default"
+                )
 
         if "roslaunch auto-scout companion_runtime.launch" not in compose_text:
             container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
@@ -479,6 +520,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime command must source /opt/ros/melodic/setup.bash")
         if "localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}" not in compose_text:
             container_issues.append("companion-runtime must default localization_mode from AUTO_SCOUT_LOCALIZATION_MODE")
+        if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in compose_text:
+            container_issues.append("companion-runtime must pass AUTO_SCOUT_ODOM_MODEL_TYPE into the container")
 
     companion_start_path = REPO_ROOT / "scripts" / "start_companion_stack.sh"
     if companion_start_path.is_file():
@@ -489,8 +532,16 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("scripts/start_companion_stack.sh must fail fast when AUTO_SCOUT_ROS_HOSTNAME is unset")
         if 'AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_LOCALIZATION_MODE with a mapping-safe default")
+        if 'AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default")
         if 'AUTO_SCOUT_ROS_MASTER_URI="${AUTO_SCOUT_ROS_MASTER_URI:-http://moorebot-scout.local:11311}"' in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must not silently default ROS master settings to moorebot-scout.local")
+
+    env_example_path = REPO_ROOT / "container" / ".env.example"
+    if env_example_path.is_file():
+        env_example_text = env_example_path.read_text(encoding="utf-8")
+        if "AUTO_SCOUT_ODOM_MODEL_TYPE=diff" not in env_example_text:
+            container_issues.append("container/.env.example must document AUTO_SCOUT_ODOM_MODEL_TYPE=diff")
 
     if dockerfile_path.is_file():
         dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
@@ -519,6 +570,68 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "repo.companion_container_contract",
             "pass",
             "Companion stack stays inside one host-networked ROS1 container",
+        )
+
+    deploy_issues = []
+    deploy_path = REPO_ROOT / "src" / "auto_scout" / "deploy.py"
+    deploy_text = deploy_path.read_text(encoding="utf-8") if deploy_path.is_file() else ""
+    if not deploy_path.is_file():
+        deploy_issues.append("src/auto_scout/deploy.py is missing")
+    else:
+        if "moorebot-scout.local" in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must not silently default ROS endpoints to moorebot-scout.local")
+        if ".get(\"advertise_host\", \"localhost\")" in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must not silently default ROS advertise_host to localhost")
+        if "_require_configured_setting" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must fail fast when ROS endpoint settings are absent")
+        if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must render AUTO_SCOUT_ODOM_MODEL_TYPE for companion-runtime")
+
+    if deploy_issues:
+        report.add(
+            "repo.deploy_contract",
+            "fail",
+            "Deploy rendering still contains unsupported fallback behavior",
+            details=deploy_issues,
+        )
+    else:
+        report.add(
+            "repo.deploy_contract",
+            "pass",
+            "Deploy rendering fails fast on missing ROS endpoints and carries the Scout drive model",
+        )
+
+    build_issues = []
+    cmake_path = REPO_ROOT / "CMakeLists.txt"
+    cmake_text = cmake_path.read_text(encoding="utf-8") if cmake_path.is_file() else ""
+    native_sources = [
+        path for path in REPO_ROOT.rglob("*")
+        if path.suffix.lower() in NATIVE_SOURCE_SUFFIXES
+        and not any(
+            item in path.parts
+            for item in [".git", "legacy", "build", "devel", "install", "artifacts", "venv", ".venv"]
+        )
+    ]
+    native_opencv_users = [path for path in native_sources if _native_source_uses_opencv(path)]
+    if "find_package(OpenCV" in cmake_text and not native_opencv_users:
+        build_issues.append("CMakeLists.txt must not require OpenCV when no native source files use it")
+    if "${OpenCV_INCLUDE_DIRS}" in cmake_text and not native_opencv_users:
+        build_issues.append("CMakeLists.txt must not inject OpenCV include dirs without native OpenCV consumers")
+
+    if build_issues:
+        report.add(
+            "repo.build_dependency_contract",
+            "fail",
+            "Build metadata still carries an unsupported OpenCV dependency",
+            details=build_issues,
+            evidence={"native_sources": [str(path.relative_to(REPO_ROOT)) for path in native_sources]},
+        )
+    else:
+        report.add(
+            "repo.build_dependency_contract",
+            "pass",
+            "Build metadata does not require unused native OpenCV dependencies",
+            evidence={"native_sources": [str(path.relative_to(REPO_ROOT)) for path in native_sources]},
         )
 
     cli_issues = []
@@ -659,6 +772,12 @@ def _add_site_role_checks(report, site_config, site_path, effective_role):
             issues.append("{} missing workspace_dir".format(role_name))
         if "ssh" not in role:
             issues.append("{} missing ssh".format(role_name))
+            continue
+        ssh_host = role.get("ssh", {}).get("host")
+        if not ssh_host:
+            issues.append("{} missing ssh.host".format(role_name))
+        elif _is_generated_placeholder(ssh_host):
+            issues.append("{} ssh.host still uses generated placeholder '{}'".format(role_name, ssh_host))
 
     if issues:
         report.add(
@@ -733,14 +852,30 @@ def _add_live_probe_check(report, site_config, effective_role, runtime_profile, 
     if observe_motion and observed_motion and not observed_motion.get("moved", False):
         details.append("Observed odometry did not change during the motion observation window.")
     elif observe_motion and observed_motion:
-        details.append("Observed odometry changed during the motion observation window.")
+        details.append(
+            "Observed odometry changed during the motion observation window "
+            "(dx={:.3f}, dy={:.3f}, dominant_axis={}).".format(
+                observed_motion.get("delta_x", 0.0),
+                observed_motion.get("delta_y", 0.0),
+                observed_motion.get("dominant_axis", "none"),
+            )
+        )
     elif not observe_motion:
         details.append("Pose was not dynamically confirmed; rerun with --observe-motion to verify movement.")
 
-    if exercise_cmd_vel and not probe_result.get("observed", {}).get("command_exercise", {}).get("moved", False):
+    command_exercise = probe_result.get("observed", {}).get("command_exercise", {})
+    if exercise_cmd_vel and not command_exercise.get("moved", False):
         details.append("Vendor command exercise did not produce observable motion.")
     elif exercise_cmd_vel:
-        details.append("Vendor command exercise produced observable motion.")
+        details.append(
+            "Vendor command exercise produced observable motion "
+            "(forward_axis={}, dx={:.3f}, dy={:.3f}, dominant_axis={}).".format(
+                command_exercise.get("forward_axis"),
+                command_exercise.get("delta_x", 0.0),
+                command_exercise.get("delta_y", 0.0),
+                command_exercise.get("dominant_axis", "none"),
+            )
+        )
 
     if mismatch_items:
         details.extend(
@@ -895,6 +1030,12 @@ def _add_scout_checks(report, site_config, runtime_profile):
             issues.append("scout.topics.{} is missing".format(name))
     if not ros_settings.get("advertise_host"):
         issues.append("scout.ros.advertise_host is missing")
+    elif _is_generated_placeholder(ros_settings.get("advertise_host")):
+        issues.append("scout.ros.advertise_host still uses a generated placeholder")
+    try:
+        normalize_drive_model(role_motion_setting(scout, "drive_model"))
+    except ValueError as exc:
+        issues.append(str(exc))
 
     status = "fail" if issues else "pass"
     summary = "Scout inventory declares the required bridge, motion, camera, and scan capabilities"
@@ -949,8 +1090,12 @@ def _add_companion_checks(report, site_config, runtime_profile):
             issues.append("compose file is missing: {}".format(compose_path))
     if not ros_settings.get("master_uri"):
         issues.append("companion.ros.master_uri is missing")
+    elif _is_generated_placeholder(ros_settings.get("master_uri")):
+        issues.append("companion.ros.master_uri still uses a generated placeholder")
     if not ros_settings.get("advertise_host"):
         issues.append("companion.ros.advertise_host is missing")
+    elif _is_generated_placeholder(ros_settings.get("advertise_host")):
+        issues.append("companion.ros.advertise_host still uses a generated placeholder")
     if ros_settings.get("master_uri", "").startswith("http://localhost"):
         issues.append("companion.ros.master_uri must not point to localhost in the cross-host topology")
 

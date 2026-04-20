@@ -28,6 +28,7 @@ roles:
       vendor_dog_detection: "/scout/dog_detection_external"
     motion:
       forward_axis: "y"
+      drive_model: "diff"
     adapters:
       motion: "rollereye_or_vendor_bridge"
       camera: "opencv_device"

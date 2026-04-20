@@ -17,6 +17,7 @@ services:
     environment:
       AUTO_SCOUT_CONFIG: /opt/catkin_ws/src/auto-scout/config/scout_config.yaml
       AUTO_SCOUT_SITE_CONFIG: /opt/catkin_ws/src/auto-scout/config/site.yaml
+      AUTO_SCOUT_ODOM_MODEL_TYPE: ${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}
       # The supported v1 path treats the companion container as the autonomy
       # boundary. Do not replace this with a ros1_bridge/Jazzy boundary unless
       # the documented architecture is intentionally being changed.

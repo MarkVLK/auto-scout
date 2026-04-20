@@ -12,6 +12,7 @@ Before you start, treat these as design constraints:
 - The official Moorebot open-source repo recommends compiling in Ubuntu 18.04 and exposes a custom `rollereye` API plus a few ROS topics.
 - ROS Noetic targets Ubuntu 20.04 and Python 3.8, which does not line up with the public Scout environment.
 - The rooted Scout unit validated for this repo exposed Debian 9, ROS Melodic-era tooling, Python 2.7 ROS nodes, `/cmd_vel_force`, `/MotorNode/baselink_odom_relative`, `/MotorNode/vio_odom_relative`, and a free UART at `/dev/ttyS4`.
+- Public materials may describe mecanum wheels, but actual rooted units can differ; set `roles.scout.motion.drive_model` from live behavior, not product-page assumptions.
 
 Because of that, this project uses the Scout as a lightweight robot endpoint and moves SLAM, navigation, storage, and notifications to a companion system.
 
@@ -23,6 +24,7 @@ The clean-slate runtime split in this repo is:
 - `config/site.yaml` as the single inventory for both hosts
 
 For open-source use, treat `config/site.yaml` as a generated or user-owned inventory, not a file that should require manual patching to hardcoded usernames. Use `./auto-scout configure scout` and `./auto-scout configure companion` to write it, or pass flags such as `--ssh-user`, `--workspace-dir`, and `--storage-root` directly to `configure` or `deploy`.
+Generated host defaults now use `.invalid` placeholders so a new inventory fails visibly until you replace them with working DNS or IP values.
 
 ## 2. Hardware Layout
 
@@ -100,14 +102,17 @@ Recommended operator flow:
 # Write companion settings with prompts
 ./auto-scout configure companion
 
+# Write Scout settings with an explicit non-strafing drive model
+./auto-scout configure scout --drive-model diff
+
 # Or set them explicitly without prompts
 ./auto-scout configure companion \
   --non-interactive \
-  --ssh-host auto-scout-pi5.local \
+  --ssh-host pi5-host \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
   --ros-master-uri http://192.168.0.199:11311 \
-  --advertise-host auto-scout-pi5.local \
+  --advertise-host pi5-host \
   --storage-root /srv/auto-scout
 
 # Then deploy
@@ -161,6 +166,7 @@ You need one of:
 Do not start full-house autonomous mapping until this piece is solved.
 
 This is the main reason the repo stays on the ROS1 companion path for v1. Until pose is proven, changing autonomy frameworks adds risk without solving the gating dependency.
+Also do not assume `forward_axis` tells you which AMCL odom model to use. `forward_axis` normalizes vendor command axes; `roles.scout.motion.drive_model` selects `diff` vs `omni` motion behavior for localization.
 
 ## 7. Storage Policy
 

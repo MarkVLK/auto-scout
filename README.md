@@ -11,7 +11,7 @@ The clean-slate reset in this repo now treats the runnable system as two explici
 
 As of April 18, 2026, the most relevant public sources say:
 
-- Moorebot's product page lists a quad-core ARM A7 @ 1.2 GHz, 512 MB RAM, Linux + "ROS 1.4", IMU, ToF, 1080p camera, and mecanum wheels.
+- Moorebot's product page lists a quad-core ARM A7 @ 1.2 GHz, 512 MB RAM, Linux + "ROS 1.4", IMU, ToF, 1080p camera, and mecanum wheels, but rooted units can still differ in drivetrain behavior and should be configured from live evidence.
 - The Moorebot Scout User Manual V4.0 lists 4 GB eMMC and describes patrol creation as manually driving a path from the dock and saving it.
 - Moorebot's FAQ says the onboard flash is 8 GB, user-accessible storage is only about 2 to 3 GB, and there is no SD card slot.
 - Moorebot's official open-source repo recommends an Ubuntu 18.04 build environment and exposes a custom `rollereye` Python API plus topics such as `/CoreNode/h264`, `/SensorNode/imu`, and `/SensorNode/tof`.
@@ -81,7 +81,10 @@ For the rooted Scout unit validated in the LiDAR bring-up transcript, treat thes
 - Scout workspace: `/userdata/catkin_ws/src/auto-scout`
 - Scout LiDAR device: `/dev/ttyS4`
 - Scout ROS era: Melodic / Python 2.7
+- Scout drive model: `diff` for a non-strafing treaded base
 - Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch`
+
+If your rooted Scout can strafe, set `roles.scout.motion.drive_model` to `omni`. Keep `roles.scout.motion.forward_axis` separate from that choice; axis remapping and AMCL motion modeling are different contracts.
 
 Do not treat building upstream C++ LD19 packages on the Scout as the supported baseline for this image. The current repo path is source-only deploy plus the built-in Python serial driver, with live probe and validation used to confirm the real unit still matches the saved inventory.
 
@@ -144,11 +147,12 @@ Deployment support is intentionally narrow and now routes through the headless C
 The install/deploy path is now designed to be configurable without hand-editing hardcoded usernames and paths.
 
 - Use `./auto-scout configure scout` or `./auto-scout configure companion` to write or update `config/site.yaml`
-- Pass values such as `--ssh-user`, `--ssh-host`, `--workspace-dir`, `--service-user`, or `--storage-root` on the CLI when you already know them
+- Pass values such as `--ssh-user`, `--ssh-host`, `--workspace-dir`, `--service-user`, `--storage-root`, or `--drive-model` on the CLI when you already know them
 - If you omit those flags in an interactive shell, the CLI prompts you with the current/default value and lets you accept it or replace it
 - Use `--non-interactive` when you want saved values or explicit flags to be used without prompts
 - The default Scout workspace now points at `/userdata/catkin_ws/src/auto-scout` so the rooted Scout path does not depend on scarce rootfs space
 - The default Scout-attached LD19 device now points at `/dev/ttyS4`; use `--lidar-device /dev/ttyUSB0` only when the LiDAR is physically attached somewhere else
+- Generated host defaults now use `.invalid` placeholders so a fresh inventory cannot silently deploy against unresolved mDNS assumptions; replace them with real IPs, DNS names, or `.local` values that you know resolve on your network
 
 For example:
 
@@ -159,7 +163,7 @@ For example:
 # Configure without prompts
 ./auto-scout configure companion \
   --non-interactive \
-  --ssh-host auto-scout-pi5.local \
+  --ssh-host pi5-host \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
   --storage-root /srv/auto-scout
