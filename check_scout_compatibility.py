@@ -408,6 +408,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         )
 
     launch_issues = []
+    launch_roots = {}
     expected_nodes = {
         "launch/scout_runtime.launch": [
             "scout_runtime_agent",
@@ -426,7 +427,12 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             launch_issues.append("{} is missing".format(relative_path))
             continue
 
-        root = ET.parse(str(launch_path)).getroot()
+        try:
+            root = ET.parse(str(launch_path)).getroot()
+        except ET.ParseError as exc:
+            launch_issues.append("{} is not valid XML: {}".format(relative_path, exc))
+            continue
+        launch_roots[relative_path] = root
         present_names = {node.attrib.get("name") for node in root.iter("node")}
         missing = [name for name in node_names if name not in present_names]
         if missing:
@@ -436,6 +442,65 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             resolved = resolve_find_expression("auto-scout", element.attrib.get("file"))
             if resolved and not resolved.is_file():
                 launch_issues.append("{} includes missing file {}".format(relative_path, resolved))
+
+    urdf_path = REPO_ROOT / "urdf" / "scout.urdf"
+    if not urdf_path.is_file():
+        launch_issues.append("urdf/scout.urdf is missing")
+    else:
+        try:
+            urdf_root = ET.parse(str(urdf_path)).getroot()
+        except ET.ParseError as exc:
+            launch_issues.append("urdf/scout.urdf is not valid XML: {}".format(exc))
+            urdf_root = None
+
+        if urdf_root is not None:
+            link_names = {link.attrib.get("name") for link in urdf_root.iter("link")}
+            for required_link in ["base_link", "base_laser"]:
+                if required_link not in link_names:
+                    launch_issues.append("urdf/scout.urdf is missing link '{}'".format(required_link))
+
+            joints = list(urdf_root.iter("joint"))
+            laser_joint = next((joint for joint in joints if joint.attrib.get("name") == "base_to_laser"), None)
+            if laser_joint is None:
+                launch_issues.append("urdf/scout.urdf is missing fixed joint base_to_laser")
+            else:
+                parent = laser_joint.find("parent")
+                child = laser_joint.find("child")
+                origin = laser_joint.find("origin")
+                if laser_joint.attrib.get("type") != "fixed":
+                    launch_issues.append("urdf/scout.urdf base_to_laser must be a fixed joint")
+                if parent is None or parent.attrib.get("link") != "base_link":
+                    launch_issues.append("urdf/scout.urdf base_to_laser parent must be base_link")
+                if child is None or child.attrib.get("link") != "base_laser":
+                    launch_issues.append("urdf/scout.urdf base_to_laser child must be base_laser")
+                if origin is None or origin.attrib.get("xyz") != "0.1 0 0.05" or origin.attrib.get("rpy") != "0 0 0":
+                    launch_issues.append("urdf/scout.urdf base_to_laser origin must be xyz='0.1 0 0.05' rpy='0 0 0'")
+
+            slam_root = launch_roots.get("launch/slam_mapping.launch")
+            if slam_root is not None:
+                non_fixed_joints = [joint for joint in joints if joint.attrib.get("type") != "fixed"]
+                if not non_fixed_joints:
+                    for node in slam_root.iter("node"):
+                        if node.attrib.get("pkg") == "joint_state_publisher":
+                            launch_issues.append(
+                                "launch/slam_mapping.launch should not run joint_state_publisher for the fixed-only Scout URDF"
+                            )
+                            break
+
+                for node in slam_root.iter("node"):
+                    if node.attrib.get("pkg") != "tf2_ros" or node.attrib.get("type") != "static_transform_publisher":
+                        continue
+                    try:
+                        args = shlex.split(node.attrib.get("args", ""))
+                    except ValueError as exc:
+                        launch_issues.append(
+                            "launch/slam_mapping.launch has invalid static_transform_publisher args: {}".format(exc)
+                        )
+                        continue
+                    if args[-2:] == ["base_link", "base_laser"]:
+                        launch_issues.append(
+                            "launch/slam_mapping.launch must not duplicate the URDF base_link->base_laser transform"
+                        )
 
     navigation_text = (REPO_ROOT / "launch" / "navigation.launch").read_text(encoding="utf-8")
     if 'name="odom_model_type"' not in navigation_text or "AUTO_SCOUT_ODOM_MODEL_TYPE" not in navigation_text:

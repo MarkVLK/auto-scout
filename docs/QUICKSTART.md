@@ -46,6 +46,7 @@ Before touching autonomy:
 - confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
 - confirm the camera or video bridge works
 - confirm the LD19 publishes `/scan`
+- verify the actual LD19 mounting offset from `base_link` to `base_laser` before mapping; `urdf/scout.urdf` is the source of truth for that transform
 - on the validated rooted Scout path, keep the Scout workspace under `/userdata/catkin_ws/src/auto-scout`
 - on the validated rooted Scout path, treat `/dev/ttyS4` as the default Scout-attached LD19 device
 - use the repo's built-in `ld19_lidar_driver.py` as the supported Scout-side LD19 path; do not treat building upstream C++ LD19 packages on the Scout as the baseline bring-up

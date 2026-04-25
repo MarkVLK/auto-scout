@@ -24,7 +24,6 @@ find_package(catkin REQUIRED COMPONENTS
   costmap_2d
   rviz
   robot_state_publisher
-  joint_state_publisher
   cv_bridge
   image_transport
 )
@@ -53,7 +52,6 @@ catkin_package(
     costmap_2d
     rviz
     robot_state_publisher
-    joint_state_publisher
     cv_bridge
     image_transport
 )

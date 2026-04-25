@@ -10,19 +10,10 @@
 
   <param name="robot_description" textfile="$(find auto-scout)/urdf/scout.urdf" />
 
-  <!-- Robot state publisher -->
+  <!-- Robot state publisher publishes the fixed frame tree from urdf/scout.urdf. -->
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
     <param name="publish_frequency" value="30.0"/>
   </node>
-
-  <!-- Joint state publisher -->
-  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
-    <param name="use_gui" value="false"/>
-  </node>
-
-  <!-- Transform between base_link and base_laser -->
-  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_laser"
-        args="0.1 0 0.05 0 0 0 base_link base_laser"/>
 
   <!-- SLAM: Gmapping -->
   <node name="slam_gmapping" pkg="gmapping" type="slam_gmapping" output="screen">

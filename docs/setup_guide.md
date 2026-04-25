@@ -74,6 +74,10 @@ For the LD19:
 - publish `/scan`
 - confirm a stable frame id and transform to `base_link`
 
+The LiDAR mount transform is a calibration input. In this repo, `urdf/scout.urdf` is the operational source of truth for the fixed `base_link` to `base_laser` transform. Measure the physical LD19 position relative to the robot base and update that URDF joint if the mount differs from the checked-in value.
+
+Programmatic calibration is possible in principle, but only with known targets, synchronized sensor data, and established camera, ToF, and LiDAR frame calibration. Treat camera, ToF, and LiDAR comparisons as validation or refinement evidence, not as a reason to automatically rewrite the URDF from casual observations.
+
 For the validated rooted Scout path in this repo:
 
 - the default Scout-attached LD19 device is `/dev/ttyS4`

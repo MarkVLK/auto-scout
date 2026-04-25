@@ -37,7 +37,6 @@
   <!-- Visualization -->
   <depend>rviz</depend>
   <depend>robot_state_publisher</depend>
-  <depend>joint_state_publisher</depend>
 
   <!-- Image processing -->
   <depend>cv_bridge</depend>
