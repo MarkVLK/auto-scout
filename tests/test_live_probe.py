@@ -27,6 +27,7 @@ class FakeRunner:
     """Deterministic command runner for probe unit tests."""
 
     def __init__(self, overrides=None):
+        self.commands = []
         self.lookup = {
             "printf 'ROS_MASTER_URI=%s": FakeCommandResult(
                 stdout="ROS_MASTER_URI=http://scout.example.test:11311\nROS_HOSTNAME=scout.example.test\nROS_IP=\n",
@@ -69,6 +70,7 @@ class FakeRunner:
 
     def run(self, command, cwd=None, check=True):
         command_text = command if isinstance(command, str) else " ".join(command)
+        self.commands.append(command_text)
         for needle, result in self.lookup.items():
             if needle in command_text:
                 return result
@@ -83,12 +85,13 @@ class LiveProbeTest(unittest.TestCase):
 
     def test_probe_infers_pose_and_motion_from_fake_runner(self):
         site_config = default_site_config()
+        runner = FakeRunner()
 
         result = probe_scout_capabilities(
             site_config,
             observe_motion_seconds=5,
             exercise_cmd_vel=True,
-            runner=FakeRunner(),
+            runner=runner,
             force_remote=True,
         )
 
@@ -102,6 +105,9 @@ class LiveProbeTest(unittest.TestCase):
         self.assertEqual(result["observed"]["command_exercise"]["dominant_axis"], "x")
         self.assertGreater(result["observed"]["command_exercise"]["delta_x"], 0.0)
         self.assertGreater(result["observed"]["command_exercise"]["delta_x"], result["observed"]["command_exercise"]["delta_y"])
+        self.assertTrue(any("timeout 8s rostopic list" in command for command in runner.commands))
+        self.assertTrue(any("timeout 8s rosnode list" in command for command in runner.commands))
+        self.assertTrue(any("timeout 5s rostopic info /scan" in command for command in runner.commands))
 
     def test_probe_suggests_ttys4_and_vio_odom_when_defaults_are_wrong(self):
         site_config = default_site_config()

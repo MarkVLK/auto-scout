@@ -51,7 +51,7 @@ roles:
       map_cache_dir: "/var/tmp/auto-scout/scout_map_cache"
 
   companion:
-    hostname: "pi5-companion"
+    hostname: "auto-scout-pi5"
     workspace_dir: "/home/ubuntu/auto-scout"
     ssh:
       host: "companion-host-or-ip.invalid"

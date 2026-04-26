@@ -47,7 +47,8 @@ class ScoutOdomBridge:
     def _normalize_twist(self, twist):
         if self.forward_axis == "x":
             return twist
-        twist.linear.x, twist.linear.y = twist.linear.y, twist.linear.x
+        body_twist = twist.twist if hasattr(twist, "twist") else twist
+        body_twist.linear.x, body_twist.linear.y = body_twist.linear.y, body_twist.linear.x
         return twist
 
     def callback(self, msg):
@@ -86,7 +87,7 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    args, _ = build_parser().parse_known_args(argv)
     bridge = ScoutOdomBridge(config_path=args.config, site_path=args.site)
     bridge.run()
     return 0

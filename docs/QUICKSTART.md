@@ -26,9 +26,27 @@ Start with the role-aware validator from this repo:
 
 Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure `config/site_local.yaml` reflects what is actually proven on your Scout and Raspberry Pi 5. The tracked [config/site.yaml](../config/site.yaml) file is only the sample baseline.
 
+For the smoke-loop notification gate, keep the real webhook URL out of tracked config and write it only to `config/site_local.yaml`:
+
+```bash
+./auto-scout configure companion \
+  --non-interactive \
+  --skip-connectivity-check \
+  --enable-notify \
+  --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
+```
+
+If you run full system validation from the Pi, provision SSH known hosts first:
+
+```bash
+cd /home/automark/auto-scout
+scripts/provision_pi_known_hosts.sh
+```
+
 Pay attention to:
 
 - whether `config/site_local.yaml` matches the real Scout and Raspberry Pi 5 targets
+- whether hostname targets such as `moorebot-scout.local` and `auto-scout-pi5.local` resolve from the Mac, Pi host, Scout, and companion container before they are used as ROS endpoints
 - whether pose, motion, notify, and dock capabilities are declared correctly
 - whether the Scout probe found the expected vendor odometry and motion topics
 - whether mapping, patrol, and smoke-loop readiness are reported as `PASS`, `WARN`, or `FAIL`

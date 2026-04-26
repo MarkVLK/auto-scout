@@ -113,15 +113,56 @@ Recommended operator flow:
 # Or set them explicitly without prompts
 ./auto-scout configure companion \
   --non-interactive \
-  --ssh-host companion.example.test \
+  --ssh-host auto-scout-pi5.local \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
-  --ros-master-uri http://192.0.2.10:11311 \
-  --advertise-host companion.example.test \
+  --ros-master-uri http://moorebot-scout.local:11311 \
+  --advertise-host auto-scout-pi5.local \
   --storage-root /srv/auto-scout
 
 # Then deploy
 ./auto-scout deploy companion --non-interactive
+```
+
+For mDNS-based networks, use `moorebot-scout.local` as the Scout SSH and ROS host and `auto-scout-pi5.local` as the companion SSH and advertised ROS host. `roles.*.hostname` is only a label; the connection targets are `ssh.host`, `ros.master_uri`, and `ros.advertise_host`.
+
+On each Linux host, publish the intended name and enable mDNS lookup:
+
+```bash
+# Scout
+sudo hostnamectl set-hostname moorebot-scout
+sudo apt-get update
+sudo apt-get install -y avahi-daemon libnss-mdns
+sudo systemctl enable --now avahi-daemon
+
+# Pi companion
+sudo hostnamectl set-hostname auto-scout-pi5
+sudo apt-get update
+sudo apt-get install -y avahi-daemon libnss-mdns
+sudo systemctl enable --now avahi-daemon
+```
+
+If `sudo` warns that it cannot resolve the local host after a rename, add a local self-alias such as `127.0.1.1 moorebot-scout` or `127.0.1.1 auto-scout-pi5` to that host's `/etc/hosts`. Do not use `/etc/hosts` for peer device addresses; that would reintroduce stale DHCP state.
+
+Before deploying with `.local` names, verify:
+
+```bash
+# Mac/operator machine
+ping moorebot-scout.local
+ping auto-scout-pi5.local
+ssh linaro@moorebot-scout.local
+ssh automark@auto-scout-pi5.local
+
+# Pi host
+getent hosts moorebot-scout.local
+getent hosts auto-scout-pi5.local
+
+# Scout
+getent hosts auto-scout-pi5.local
+
+# Companion container after it is started
+docker exec auto-scout-melodic getent hosts moorebot-scout.local
+docker exec auto-scout-melodic getent hosts auto-scout-pi5.local
 ```
 
 Container expectations:
@@ -129,6 +170,8 @@ Container expectations:
 - one service: `companion-runtime`
 - `network_mode: host`
 - ROS1-era autonomy packages inside the container
+- mDNS/NSS lookup support for `.local` names
+- host Avahi and D-Bus socket mounts so container-side ROS processes can resolve peer `.local` names
 - Scout-side motion and sensor integration kept outside the container boundary unless proven otherwise on your unit
 
 For direct `docker compose` usage outside `./auto-scout deploy companion`, copy `container/.env.example` to `container/.env` and replace the placeholder ROS values before you start the service.
@@ -233,6 +276,31 @@ Use these commands as the supported operator flow:
 ./auto-scout deploy companion
 ./auto-scout validate system
 ./auto-scout run smoke-loop
+```
+
+Before expecting `validate system` to pass from the Pi itself, seed
+`automark`'s SSH known-host file for the two `.local` device names:
+
+```bash
+cd /home/automark/auto-scout
+scripts/provision_pi_known_hosts.sh
+ssh -o BatchMode=yes linaro@moorebot-scout.local true
+ssh -o BatchMode=yes automark@auto-scout-pi5.local true
+```
+
+If those batch SSH checks fail because the Pi's default key is
+passphrase-protected, use a separate Pi-local validation key and host-specific
+`~/.ssh/config` entries instead of disabling host-key checks.
+
+Before expecting `run smoke-loop` to pass, keep the real webhook URL in the
+untracked site inventory and enable the companion notification capability:
+
+```bash
+./auto-scout configure companion \
+  --non-interactive \
+  --skip-connectivity-check \
+  --enable-notify \
+  --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
 ```
 
 ## 12. Source References

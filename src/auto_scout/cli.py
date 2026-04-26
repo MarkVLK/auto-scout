@@ -106,6 +106,18 @@ def _add_role_config_arguments(parser):
     parser.add_argument("--service-user", default=None, help="Systemd service user; defaults to the SSH user")
     parser.add_argument("--service-group", default=None, help="Systemd service group; defaults to the service user")
     parser.add_argument("--storage-root", default=None, help="Companion storage root; maps/media/events live under it")
+    notify_group = parser.add_mutually_exclusive_group()
+    notify_group.add_argument(
+        "--enable-notify",
+        action="store_true",
+        help="Enable companion notification capability for missions that require notifications",
+    )
+    notify_group.add_argument(
+        "--disable-notify",
+        action="store_true",
+        help="Disable companion notification capability",
+    )
+    parser.add_argument("--notify-webhook-url", default=None, help="Companion webhook URL for mission notifications")
     parser.add_argument("--camera-device", default=None, help="Scout camera device path")
     parser.add_argument("--lidar-device", default=None, help="Scout lidar device path")
     parser.add_argument("--drive-model", choices=["diff", "omni"], default=None, help="Scout drive model for AMCL")
@@ -149,6 +161,9 @@ def _blank_role_args():
         service_user=None,
         service_group=None,
         storage_root=None,
+        enable_notify=False,
+        disable_notify=False,
+        notify_webhook_url=None,
         camera_device=None,
         lidar_device=None,
         drive_model=None,

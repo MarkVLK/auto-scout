@@ -245,7 +245,7 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    args, _ = build_parser().parse_known_args(argv)
     controller = CompanionMissionController(
         config_path=args.config,
         site_path=args.site,

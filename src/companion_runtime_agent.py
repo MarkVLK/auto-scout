@@ -48,7 +48,7 @@ def run_heartbeat(site_path=None):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    args, _ = build_parser().parse_known_args(argv)
     run_heartbeat(args.site)
     return 0
 

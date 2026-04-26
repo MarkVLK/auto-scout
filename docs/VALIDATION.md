@@ -24,6 +24,42 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 ./auto-scout validate system
 ```
 
+For a full hostname-based system validation from the Mac, the validator checks the
+Mac's SSH/ROS reachability and then inspects companion storage and the running
+container over SSH on the configured Pi companion host. Do not create
+`/srv/auto-scout` on the Mac just to satisfy validation; those runtime
+directories belong on the companion.
+
+Before running full validation from the Pi, provision the Pi user's SSH
+known-host entries so noninteractive checks can trust both local device
+hostnames:
+
+```bash
+cd /home/automark/auto-scout
+scripts/provision_pi_known_hosts.sh
+ssh -o BatchMode=yes linaro@moorebot-scout.local true
+ssh -o BatchMode=yes automark@auto-scout-pi5.local true
+```
+
+The helper uses `ssh-keyscan` and does not disable SSH host-key checking.
+If either batch command fails with `Permission denied` and the Pi's default key
+is passphrase-protected, create a dedicated unencrypted Pi-local validation key,
+install only its public key into the Scout and Pi `authorized_keys` files, and
+select it from the Pi's `~/.ssh/config` for `moorebot-scout.local` and
+`auto-scout-pi5.local`.
+
+Smoke-loop notifications are intentionally configured only in
+`config/site_local.yaml`. Enable them with a real webhook URL before expecting
+the smoke-loop gate to pass:
+
+```bash
+./auto-scout configure companion \
+  --non-interactive \
+  --skip-connectivity-check \
+  --enable-notify \
+  --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
+```
+
 ## What It Validates
 
 `--mode repo` checks:
@@ -43,6 +79,7 @@ python3 check_scout_compatibility.py --mode all --role system --json-out validat
 
 - whether the host looks like a Scout endpoint or a companion computer
 - role declarations in the effective site inventory
+- configured hostname resolution, including companion-container lookup of Scout and Pi `.local` names when the container is running
 - companion storage directories and container stack expectations
 - Scout bridge, motion, camera, and scan capability declarations
 - Scout LiDAR serial-device presence and whether the configured service user can access it

@@ -3,12 +3,14 @@
 
 import argparse
 import ast
+import ipaddress
 import json
 import os
 import platform
 import re
 import shlex
 import shutil
+import socket
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -21,10 +23,12 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from auto_scout.mission_config import load_mission_config
+from auto_scout.command_runner import CommandRunner
 from auto_scout.live_probe import ProbeExecutor
 from auto_scout.live_probe import probe_scout_capabilities
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
 from auto_scout.network_validation import validate_site_connectivity
+from auto_scout.network_validation import parse_ros_master_uri
 from auto_scout.site_config import load_site_config, normalize_drive_model, role_config, role_motion_setting, role_service_identity
 from auto_scout.yaml_loader import load_yaml
 from config_utils import load_scout_config
@@ -208,6 +212,93 @@ def find_local_markdown_link_targets(root_path):
 
 def _is_generated_placeholder(value):
     return PLACEHOLDER_MARKER in str(value or "")
+
+
+def _hostname_candidate(value):
+    host = str(value or "").strip()
+    if not host or _is_generated_placeholder(host):
+        return None
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        return host
+
+
+def _unique_hostname_candidates(values):
+    result = []
+    seen = set()
+    for value in values:
+        host = _hostname_candidate(value)
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        result.append(host)
+    return result
+
+
+def _ros_master_host(role_settings):
+    parsed, error = parse_ros_master_uri(role_settings.get("ros", {}).get("master_uri"))
+    if error or not parsed:
+        return None
+    return parsed.get("host")
+
+
+def _hostname_labels(value):
+    host = str(value or "").strip().lower()
+    if not host or _is_generated_placeholder(host):
+        return set()
+
+    labels = {host}
+    if "." in host:
+        labels.add(host.split(".", 1)[0])
+    return {item for item in labels if item}
+
+
+def _local_hostname_labels():
+    values = [
+        platform.node(),
+        os.environ.get("HOSTNAME"),
+    ]
+    try:
+        values.append(socket.gethostname())
+    except OSError:
+        pass
+
+    labels = set()
+    for value in values:
+        labels.update(_hostname_labels(value))
+    return labels
+
+
+def _role_matches_local_host(role_settings):
+    role_labels = set()
+    role_labels.update(_hostname_labels(role_settings.get("hostname")))
+    role_labels.update(_hostname_labels(role_settings.get("ssh", {}).get("host")))
+    role_labels.update(_hostname_labels(role_settings.get("ros", {}).get("advertise_host")))
+    return bool(role_labels.intersection(_local_hostname_labels()))
+
+
+def _companion_checks_should_run_remote(effective_role, companion):
+    return effective_role == "system" and not _role_matches_local_host(companion)
+
+
+def _run_companion_command(companion, body):
+    runner = CommandRunner()
+    remote_command = "/bin/bash -lc {}".format(shlex.quote(body))
+    try:
+        return runner.run_remote(companion.get("ssh", {}), remote_command, check=False)
+    except RuntimeError as exc:
+        class Result:
+            ok = False
+            stdout = ""
+            stderr = str(exc)
+
+        return Result()
+
+
+def _remote_result_text(result):
+    return (getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
 
 
 def _native_source_uses_opencv(path):
@@ -565,6 +656,10 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                 container_issues.append("companion-runtime must use network_mode: host")
             if service.get("container_name") != "auto-scout-melodic":
                 container_issues.append("companion-runtime must use the auto-scout-melodic container name")
+            if "/run/avahi-daemon/socket:/run/avahi-daemon/socket" not in compose_text:
+                container_issues.append("companion-runtime must mount the host Avahi socket for mDNS hostname lookup")
+            if "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket" not in compose_text:
+                container_issues.append("companion-runtime must mount the host D-Bus socket for Avahi-backed mDNS lookup")
 
             env = service.get("environment", {})
             if not isinstance(env, dict):
@@ -586,6 +681,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
         if "/opt/ros/melodic/setup.bash" not in compose_text:
             container_issues.append("companion-runtime command must source /opt/ros/melodic/setup.bash")
+        if "source /opt/catkin_ws/devel/setup.bash" not in compose_text:
+            container_issues.append("companion-runtime command must source /opt/catkin_ws/devel/setup.bash after catkin_make")
         if "localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}" not in compose_text:
             container_issues.append("companion-runtime must default localization_mode from AUTO_SCOUT_LOCALIZATION_MODE")
         if "site_file:=${AUTO_SCOUT_SITE_CONFIG}" not in compose_text:
@@ -616,6 +713,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
     if dockerfile_path.is_file():
         dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
         required_dockerfile_strings = [
+            "avahi-utils",
+            "libnss-mdns",
             "ENV ROS_DISTRO=melodic",
             "ros-melodic-ros-base",
             "ros-melodic-gmapping",
@@ -895,6 +994,209 @@ def _add_remote_connectivity_check(report, site_config, effective_role, connecti
     )
 
 
+def _add_companion_container_hostname_resolution_check(report, site_config, effective_role, runtime_profile):
+    companion = role_config(site_config, "companion")
+    scout = role_config(site_config, "scout")
+    ros_settings = companion.get("ros", {})
+    container_name = ros_settings.get("container_name", "auto-scout-melodic")
+    remote_check = _companion_checks_should_run_remote(effective_role, companion)
+    hosts = _unique_hostname_candidates(
+        [
+            _ros_master_host(companion),
+            scout.get("ssh", {}).get("host"),
+            scout.get("ros", {}).get("advertise_host"),
+            companion.get("ros", {}).get("advertise_host"),
+        ]
+    )
+
+    if not hosts:
+        report.add(
+            "runtime.container_hostname_resolution",
+            "skip",
+            "No hostname-based ROS endpoints are configured for the companion container",
+        )
+        return
+
+    if remote_check:
+        docker_ps = _run_companion_command(companion, "timeout 8s docker ps --format '{{.Names}}'")
+        if not docker_ps.ok:
+            report.add(
+                "runtime.container_hostname_resolution",
+                "fail",
+                "Could not inspect Docker on the configured companion host",
+                details=[_remote_result_text(docker_ps)],
+                evidence={
+                    "hosts": hosts,
+                    "container_name": container_name,
+                    "check_mode": "ssh",
+                    "check_host": companion.get("ssh", {}).get("host"),
+                },
+            )
+            return
+
+        running_containers = [line.strip() for line in docker_ps.stdout.splitlines() if line.strip()]
+        if container_name not in running_containers:
+            report.add(
+                "runtime.container_hostname_resolution",
+                "skip",
+                "Companion container is not running; hostname resolution will be checked after deploy/start",
+                evidence={
+                    "hosts": hosts,
+                    "container_name": container_name,
+                    "check_mode": "ssh",
+                    "check_host": companion.get("ssh", {}).get("host"),
+                },
+            )
+            return
+
+        failures = []
+        resolved = {}
+        for host in hosts:
+            result = _run_companion_command(
+                companion,
+                "timeout 8s docker exec {} getent hosts {}".format(
+                    shlex.quote(container_name),
+                    shlex.quote(host),
+                ),
+            )
+            if result.ok and result.stdout:
+                resolved[host] = result.stdout.strip()
+            else:
+                failures.append("{} did not resolve in {}: {}".format(host, container_name, _remote_result_text(result)))
+
+        if failures:
+            report.add(
+                "runtime.container_hostname_resolution",
+                "fail",
+                "Companion container cannot resolve all configured hostnames",
+                details=failures,
+                evidence={
+                    "hosts": hosts,
+                    "resolved": resolved,
+                    "container_name": container_name,
+                    "check_mode": "ssh",
+                    "check_host": companion.get("ssh", {}).get("host"),
+                },
+            )
+            return
+
+        report.add(
+            "runtime.container_hostname_resolution",
+            "pass",
+            "Companion container resolves the configured ROS hostnames",
+            evidence={
+                "hosts": hosts,
+                "resolved": resolved,
+                "container_name": container_name,
+                "check_mode": "ssh",
+                "check_host": companion.get("ssh", {}).get("host"),
+            },
+        )
+        return
+
+    docker_ps = run_command(["docker", "ps", "--format", "{{.Names}}"])
+    if not docker_ps["ok"]:
+        report.add(
+            "runtime.container_hostname_resolution",
+            "skip",
+            "Docker is not available for container hostname-resolution validation",
+            details=[docker_ps["stderr"] or docker_ps["stdout"]],
+            evidence={"hosts": hosts, "container_name": container_name},
+        )
+        return
+
+    running_containers = [line.strip() for line in docker_ps["stdout"].splitlines() if line.strip()]
+    if container_name not in running_containers:
+        report.add(
+            "runtime.container_hostname_resolution",
+            "skip",
+            "Companion container is not running; hostname resolution will be checked after deploy/start",
+            evidence={"hosts": hosts, "container_name": container_name},
+        )
+        return
+
+    failures = []
+    resolved = {}
+    for host in hosts:
+        result = run_command(["docker", "exec", container_name, "getent", "hosts", host])
+        if result["ok"] and result["stdout"]:
+            resolved[host] = result["stdout"]
+        else:
+            failures.append("{} did not resolve in {}: {}".format(host, container_name, result["stderr"] or result["stdout"]))
+
+    if failures:
+        report.add(
+            "runtime.container_hostname_resolution",
+            "fail",
+            "Companion container cannot resolve all configured hostnames",
+            details=failures,
+            evidence={"hosts": hosts, "resolved": resolved, "container_name": container_name},
+        )
+        return
+
+    report.add(
+        "runtime.container_hostname_resolution",
+        "pass",
+        "Companion container resolves the configured ROS hostnames",
+        evidence={"hosts": hosts, "resolved": resolved, "container_name": container_name},
+    )
+
+
+def _add_scout_peer_hostname_resolution_check(report, site_config, runtime_profile, live_probe_enabled):
+    companion = role_config(site_config, "companion")
+    hosts = _unique_hostname_candidates([companion.get("ros", {}).get("advertise_host")])
+
+    if not hosts:
+        report.add(
+            "runtime.scout_peer_hostname_resolution",
+            "skip",
+            "No hostname-based companion advertised host is configured for Scout-side resolution",
+        )
+        return
+
+    if not live_probe_enabled:
+        report.add(
+            "runtime.scout_peer_hostname_resolution",
+            "skip",
+            "Scout-side hostname-resolution probing is disabled",
+            evidence={"hosts": hosts},
+        )
+        return
+
+    scout = role_config(site_config, "scout")
+    executor = ProbeExecutor(scout, force_remote=runtime_profile != "likely_scout")
+    failures = []
+    resolved = {}
+    for host in hosts:
+        python_probe = "import socket; socket.getaddrinfo({!r}, None)".format(host)
+        command = "getent hosts {host} || python -c {probe}".format(
+            host=shlex.quote(host),
+            probe=shlex.quote(python_probe),
+        )
+        result = executor.run(command, check=False)
+        if result.ok:
+            resolved[host] = (result.stdout or "").strip()
+        else:
+            failures.append("{} did not resolve from the Scout: {}".format(host, result.stderr or result.stdout))
+
+    if failures:
+        report.add(
+            "runtime.scout_peer_hostname_resolution",
+            "fail",
+            "Scout cannot resolve the companion advertised hostname",
+            details=failures,
+            evidence={"hosts": hosts, "resolved": resolved},
+        )
+        return
+
+    report.add(
+        "runtime.scout_peer_hostname_resolution",
+        "pass",
+        "Scout resolves the companion advertised hostname",
+        evidence={"hosts": hosts, "resolved": resolved},
+    )
+
+
 def _probe_mismatch_items(probe_result, prefixes):
     suggestions = probe_result.get("config_mismatch_suggestions", [])
     return [item for item in suggestions if any(item.get("path", "").startswith(prefix) for prefix in prefixes)]
@@ -1168,10 +1470,11 @@ def _add_scout_checks(report, site_config, runtime_profile):
     )
 
 
-def _add_companion_checks(report, site_config, runtime_profile):
+def _add_companion_checks(report, site_config, runtime_profile, effective_role):
     companion = role_config(site_config, "companion")
     storage = companion.get("storage", {})
     ros_settings = companion.get("ros", {})
+    remote_check = _companion_checks_should_run_remote(effective_role, companion)
 
     issues = []
     for path in storage.values():
@@ -1202,7 +1505,34 @@ def _add_companion_checks(report, site_config, runtime_profile):
     summary = "Companion inventory declares containerized ROS and primary storage"
     details = issues
 
-    if not issues and runtime_profile == "likely_companion":
+    if not issues and remote_check:
+        paths = [path for path in storage.values() if path]
+        body = (
+            "for path in {paths}; do "
+            "if [ ! -d \"$path\" ]; then printf 'missing_dir:%s\\n' \"$path\"; fi; "
+            "done; "
+            "timeout 8s docker compose version >/dev/null 2>&1 || printf 'docker_compose_unavailable\\n'"
+        ).format(paths=" ".join(shlex.quote(path) for path in paths))
+        result = _run_companion_command(companion, body)
+        if not result.ok:
+            status = "fail"
+            summary = "Companion readiness could not be checked on the configured companion host"
+            details = [_remote_result_text(result)]
+        else:
+            output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            missing_dirs = [line.split(":", 1)[1] for line in output_lines if line.startswith("missing_dir:")]
+            docker_unavailable = "docker_compose_unavailable" in output_lines
+            if missing_dirs:
+                status = "fail"
+                summary = "Companion storage directories are missing on the configured companion host"
+                details.extend("Missing directory: {}".format(path) for path in missing_dirs)
+            elif docker_unavailable:
+                status = "warn"
+                summary = "Companion storage exists, but docker compose is not available on the configured companion host"
+            else:
+                status = "pass"
+                summary = "Companion storage and Docker Compose are ready on the configured companion host"
+    elif not issues and runtime_profile == "likely_companion":
         missing_dirs = [path for path in storage.values() if not Path(path).exists()]
         if missing_dirs:
             status = "fail"
@@ -1223,6 +1553,8 @@ def _add_companion_checks(report, site_config, runtime_profile):
         evidence={
             "storage": storage,
             "ros": ros_settings,
+            "check_mode": "ssh" if remote_check else "local",
+            "check_host": companion.get("ssh", {}).get("host") if remote_check else None,
         },
     )
 
@@ -1362,10 +1694,12 @@ def add_runtime_checks(
 
     if effective_role in ["scout", "system"]:
         _add_scout_checks(report, site_config, runtime_profile)
+        _add_scout_peer_hostname_resolution_check(report, site_config, runtime_profile, live_probe_enabled)
         _add_scout_serial_access_check(report, site_config, runtime_profile, live_probe_enabled)
 
     if effective_role in ["companion", "system"]:
-        _add_companion_checks(report, site_config, runtime_profile)
+        _add_companion_checks(report, site_config, runtime_profile, effective_role)
+        _add_companion_container_hostname_resolution_check(report, site_config, effective_role, runtime_profile)
 
     _add_live_probe_check(
         report,

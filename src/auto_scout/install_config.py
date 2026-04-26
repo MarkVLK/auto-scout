@@ -110,6 +110,18 @@ def _preserve_explicit_or_update_default(current_value, old_default, new_default
 
 def configure_role(site_config, role, args, prompt=False, network_only=False):
     """Return an updated site config for the selected role."""
+    notification_args_present = any(
+        [
+            getattr(args, "enable_notify", False),
+            getattr(args, "disable_notify", False),
+            getattr(args, "notify_webhook_url", None) is not None,
+        ]
+    )
+    if getattr(args, "enable_notify", False) and getattr(args, "disable_notify", False):
+        raise ValueError("--enable-notify and --disable-notify cannot be used together")
+    if role != "companion" and notification_args_present:
+        raise ValueError("Notification configuration is only supported for the companion role")
+
     config = deepcopy(site_config)
     original_config = deepcopy(site_config)
     role_settings = role_config(config, role)
@@ -233,6 +245,14 @@ def configure_role(site_config, role, args, prompt=False, network_only=False):
             prompt=prompt,
         )
         role_settings["storage"] = companion_storage_paths(storage_root)
+        capabilities = role_settings.setdefault("capabilities", {})
+        notifications = role_settings.setdefault("notifications", {})
+        if getattr(args, "enable_notify", False):
+            capabilities["notify"] = True
+        elif getattr(args, "disable_notify", False):
+            capabilities["notify"] = False
+        if getattr(args, "notify_webhook_url", None) is not None:
+            notifications["webhook_url"] = str(args.notify_webhook_url or "").strip()
     else:
         devices = role_settings.setdefault("devices", {})
         motion = role_settings.setdefault("motion", {})

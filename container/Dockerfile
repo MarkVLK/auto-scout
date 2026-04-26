@@ -8,9 +8,13 @@ ENV ROS_DISTRO=melodic
 ENV CATKIN_WS=/opt/catkin_ws
 
 RUN apt-get update && apt-get install -y \
+    avahi-utils \
     ca-certificates \
     curl \
+    dnsutils \
     gnupg2 \
+    iputils-ping \
+    libnss-mdns \
     lsb-release \
     python \
     python-requests \

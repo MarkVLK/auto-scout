@@ -176,7 +176,7 @@ def default_site_config():
                 "storage": scout_cache_paths(),
             },
             "companion": {
-                "hostname": "pi5-companion",
+                "hostname": "auto-scout-pi5",
                 "workspace_dir": companion_workspace_for_user(companion_user),
                 "ssh": default_ssh_config(DEFAULT_COMPANION_SSH_HOST, companion_user),
                 "service_user": companion_user,

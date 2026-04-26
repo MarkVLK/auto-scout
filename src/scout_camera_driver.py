@@ -88,7 +88,7 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    args, _ = build_parser().parse_known_args(argv)
     driver = ScoutCameraDriver(config_path=args.config, site_path=args.site)
     driver.run()
     return 0

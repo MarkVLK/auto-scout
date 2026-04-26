@@ -13,6 +13,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from auto_scout.command_runner import CommandRunner
+from auto_scout.network_validation import validate_host_syntax
 from auto_scout.network_validation import validate_site_connectivity
 from auto_scout.site_config import default_site_config
 
@@ -145,6 +146,27 @@ class RemoteAccessTest(unittest.TestCase):
 
         self.assertFalse(payload["ok"])
         self.assertTrue(any("did not resolve" in item for item in payload["errors"]))
+
+    def test_validate_site_connectivity_accepts_mdns_hostnames(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ssh"]["host"] = "moorebot-scout.local"
+        site_config["roles"]["scout"]["ros"]["advertise_host"] = "moorebot-scout.local"
+        site_config["roles"]["scout"]["ros"]["master_uri"] = "http://moorebot-scout.local:11311"
+        site_config["roles"]["companion"]["ssh"]["host"] = "auto-scout-pi5.local"
+        site_config["roles"]["companion"]["ros"]["advertise_host"] = "auto-scout-pi5.local"
+        site_config["roles"]["companion"]["ros"]["master_uri"] = "http://moorebot-scout.local:11311"
+
+        payload = validate_site_connectivity(
+            site_config,
+            ["scout", "companion"],
+            validate_ssh_auth=False,
+            resolver=lambda host: None,
+            connector=lambda host, port, timeout: None,
+        )
+
+        self.assertIsNone(validate_host_syntax("moorebot-scout.local"))
+        self.assertIsNone(validate_host_syntax("auto-scout-pi5.local"))
+        self.assertTrue(payload["ok"], msg=payload["errors"])
 
 
 if __name__ == "__main__":

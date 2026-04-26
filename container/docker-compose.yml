@@ -11,9 +11,11 @@ services:
     privileged: true
     working_dir: /opt/catkin_ws/src/auto-scout
     volumes:
-      - ..:/opt/catkin_ws/src/auto-scout
-      - ${AUTO_SCOUT_STORAGE_ROOT:-/srv/auto-scout}:/srv/auto-scout
-      - /dev:/dev
+      - "..:/opt/catkin_ws/src/auto-scout"
+      - "${AUTO_SCOUT_STORAGE_ROOT:-/srv/auto-scout}:/srv/auto-scout"
+      - "/run/avahi-daemon/socket:/run/avahi-daemon/socket"
+      - "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket"
+      - "/dev:/dev"
     environment:
       AUTO_SCOUT_CONFIG: /opt/catkin_ws/src/auto-scout/config/scout_config.yaml
       AUTO_SCOUT_SITE_CONFIG: ${AUTO_SCOUT_SITE_CONFIG}
@@ -30,6 +32,7 @@ services:
         source /opt/ros/melodic/setup.bash &&
         cd /opt/catkin_ws &&
         catkin_make &&
+        source /opt/catkin_ws/devel/setup.bash &&
         roslaunch auto-scout companion_runtime.launch
         config_file:=/opt/catkin_ws/src/auto-scout/config/scout_config.yaml
         site_file:=${AUTO_SCOUT_SITE_CONFIG}

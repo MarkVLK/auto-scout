@@ -155,6 +155,7 @@ The install/deploy path is now designed to be configurable without hand-editing 
 - The default Scout workspace now points at `/userdata/catkin_ws/src/auto-scout` so the rooted Scout path does not depend on scarce rootfs space
 - The default Scout-attached LD19 device now points at `/dev/ttyS4`; use `--lidar-device /dev/ttyUSB0` only when the LiDAR is physically attached somewhere else
 - Generated host defaults now use `.invalid` placeholders so a fresh inventory cannot silently deploy against unresolved mDNS assumptions; replace them with real IPs, DNS names, or `.local` values that you know resolve on your network
+- For hostname-based setup, put the actual connection names in `ssh.host`, `ros.master_uri`, and `ros.advertise_host`; `roles.*.hostname` is only an inventory label
 
 For example:
 
@@ -165,11 +166,38 @@ For example:
 # Configure without prompts
 ./auto-scout configure companion \
   --non-interactive \
-  --ssh-host pi5-host \
+  --ssh-host auto-scout-pi5.local \
   --ssh-user automark \
   --workspace-dir /home/automark/auto-scout \
+  --ros-master-uri http://moorebot-scout.local:11311 \
+  --advertise-host auto-scout-pi5.local \
   --storage-root /srv/auto-scout
 ```
+
+### Hostname-Based Networking
+
+The recommended local-network setup is mDNS with `moorebot-scout.local` for the Scout and `auto-scout-pi5.local` for the Raspberry Pi companion. Before deploying with those names, verify resolution from every ROS participant:
+
+```bash
+# From the operator Mac
+ping moorebot-scout.local
+ping auto-scout-pi5.local
+ssh linaro@moorebot-scout.local
+ssh automark@auto-scout-pi5.local
+
+# From the Pi host
+getent hosts moorebot-scout.local
+getent hosts auto-scout-pi5.local
+
+# From the Scout
+getent hosts auto-scout-pi5.local
+
+# From the running companion container
+docker exec auto-scout-melodic getent hosts moorebot-scout.local
+docker exec auto-scout-melodic getent hosts auto-scout-pi5.local
+```
+
+ROS1 uses the advertised hostnames when peers connect back to publishers and subscribers. That means the Scout must also resolve the Pi's advertised hostname, not just the other way around. If mDNS is blocked by the Wi-Fi/router, use router DNS or DHCP hostname registration rather than static `/etc/hosts` entries.
 
 ## Validation Order
 

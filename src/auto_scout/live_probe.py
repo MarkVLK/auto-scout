@@ -266,7 +266,7 @@ def _check_device(executor, path, candidates=None):
 
 
 def _topic_details(executor, topic_name):
-    info = executor.run("rostopic info {}".format(shlex.quote(topic_name)), check=False)
+    info = executor.run("timeout 5s rostopic info {}".format(shlex.quote(topic_name)), check=False)
     topic_info = _parse_topic_info(info.stdout)
     rate = executor.run(
         "timeout 6s rostopic hz -w 5 {}".format(shlex.quote(topic_name)),
@@ -465,13 +465,13 @@ def probe_scout_capabilities(
     )
     payload["observed"]["ros_environment"] = _parse_env_output(env_result.stdout)
 
-    topic_list_result = executor.run("rostopic list", check=False)
+    topic_list_result = executor.run("timeout 8s rostopic list", check=False)
     if not topic_list_result.ok:
         payload["errors"].append("rostopic list failed: {}".format(topic_list_result.stderr.strip() or "unavailable"))
         return payload
 
     topic_names = {line.strip() for line in topic_list_result.stdout.splitlines() if line.strip()}
-    node_list_result = executor.run("rosnode list", check=False)
+    node_list_result = executor.run("timeout 8s rosnode list", check=False)
     payload["observed"]["nodes"] = [line.strip() for line in node_list_result.stdout.splitlines() if line.strip()]
 
     for device_name in ["camera", "lidar"]:
