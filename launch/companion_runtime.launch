@@ -10,6 +10,11 @@
   <node name="companion_runtime_agent" pkg="auto-scout" type="companion_runtime_agent.py"
         args="--site $(arg site_file)" output="screen" />
 
+  <node name="battery_map_return_controller" pkg="auto-scout" type="battery_map_return_controller.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen">
+    <param name="localization_mode" value="$(arg localization_mode)" />
+  </node>
+
   <group if="$(arg localization_mode)">
     <include file="$(find auto-scout)/launch/navigation.launch">
       <arg name="map_file" value="$(arg map_file)" />

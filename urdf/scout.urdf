@@ -78,6 +78,28 @@
     <origin xyz="0.075 0 0.04" rpy="0 0 0"/>
   </joint>
 
+  <!-- ToF link, initially colocated with the camera until measured on hardware -->
+  <link name="tof_link">
+    <visual>
+      <geometry>
+        <box size="0.01 0.01 0.01"/>
+      </geometry>
+      <material name="yellow">
+        <color rgba="1 1 0 1"/>
+      </material>
+    </visual>
+    <inertial>
+      <mass value="0.001"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_tof" type="fixed">
+    <parent link="base_link"/>
+    <child link="tof_link"/>
+    <origin xyz="0.075 0 0.04" rpy="0 0 0"/>
+  </joint>
+
   <!-- IMU link -->
   <link name="imu_link">
     <visual>

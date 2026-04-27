@@ -95,7 +95,50 @@ The repo's launch files now assume that a scan publisher exists and avoid depend
 
 If you are attaching the LD19 somewhere other than the Scout UART, override the default with `./auto-scout configure scout --lidar-device ...` or the matching deploy flag.
 
-## 5. Companion ROS1 Stack
+## 5. Built-In Sensor Bridges And Safety Filter
+
+The Scout runtime now normalizes the built-in ToF and IMU topics before they are used by the rest of the stack:
+
+- `/SensorNode/tof` -> `/scout/tof` as `sensor_msgs/Range`, frame `tof_link`
+- `/SensorNode/imu` -> `/scout/imu/data` as `sensor_msgs/Imu`, frame `imu_link`
+- `/scout/safety_state` reports the current safety-filter state as JSON text
+- `/SensorNode/simple_battery_status` is watched by the Scout-local low-battery dock guard
+- `/scout/battery_guard_state` reports the battery guard mode as JSON text
+- `/CoreNode/going_home_status` reports vendor docking progress and result
+
+The command path is intentionally split:
+
+- `move_base` publishes raw planner commands to `/scout/cmd_vel_planner`
+- `scout_safety_filter.py` watches `/scan` and `/scout/tof`, then publishes approved commands to `/scout/cmd_vel_companion`
+- `scout_motion_bridge.py` remaps `/scout/cmd_vel_companion` into the vendor `/cmd_vel_force` topic
+
+Configured safety behavior lives under `safety` in `config/scout_config.yaml`. By default, ToF is optional but used when present, close ToF readings slow or stop forward motion, and stale `/scan` stops normal autonomous command flow.
+
+This is not a camera/ToF/IMU navigation fallback. Full mapping and patrol still require a healthy `/scan` plus pose source. The built-in sensors add close-range safety and pose context while preserving the LD19 as the required obstacle/mapping sensor.
+
+## 6. Low-Battery Return-To-Dock
+
+The low-battery behavior is intentionally Scout-authoritative:
+
+- `scout_battery_dock_guard.py` runs on the Scout through `scout_runtime.launch`.
+- It triggers when `/SensorNode/simple_battery_status` reports battery at or below `safety.min_battery_level`.
+- It publishes `/scout/battery_guard_state` with `mode`, `battery_percent`, `charging`, `reason`, `attempt`, and `active`.
+- It accepts companion control messages on `/scout/battery_guard_control`.
+- It monitors `/CoreNode/going_home_status` for vendor docking success, failure, cancel, or timeout.
+- It calls `/nav_low_bat` only when the guard decides vendor docking should start.
+
+The companion can improve the return path, but it is not required for safety:
+
+- `battery_map_return_controller.py` runs through `companion_runtime.launch`.
+- It claims map return only when localization mode is active, `move_base` is available, pose is fresh, and `navigation.dock_approach_waypoint` exists.
+- On a valid claim, it cancels normal mission goals, sends `move_base` to the configured dock approach waypoint, then asks the Scout guard to start vendor final docking.
+- If it cannot claim, fails, or times out, the Scout guard falls back to vendor `/nav_low_bat`.
+
+The default `navigation.dock_approach_waypoint` is `charging_station` so the config has a stable placeholder. After mapping, replace that with a measured pre-dock waypoint that positions Scout close enough for the vendor docking routine to finish reliably.
+
+Do not run live docking tests until the robot is near the dock, the dock area is clear, and an operator explicitly confirms the test. Passive validation may check that `/SensorNode/simple_battery_status`, `/CoreNode/going_home_status`, and `/nav_low_bat` exist; it must not call `/nav_low_bat`.
+
+## 7. Companion ROS1 Stack
 
 Install a ROS1 navigation stack on the companion host.
 
@@ -199,7 +242,7 @@ Do not make these part of the first hardware milestone:
 - SLAM Toolbox
 - continuous YOLO or audio inference on the Pi 5
 
-## 6. Pose / Odometry Requirement
+## 8. Pose / Odometry Requirement
 
 This is the main integration risk.
 
@@ -215,8 +258,9 @@ Do not start full-house autonomous mapping until this piece is solved.
 
 This is the main reason the repo stays on the ROS1 companion path for v1. Until pose is proven, changing autonomy frameworks adds risk without solving the gating dependency.
 Also do not assume `forward_axis` tells you which AMCL odom model to use. `forward_axis` normalizes vendor command axes; `roles.scout.motion.drive_model` selects `diff` vs `omni` motion behavior for localization.
+The normalized IMU topic is available for future fusion work, but this repo does not add `robot_localization` or an EKF until real IMU quality is measured.
 
-## 7. Storage Policy
+## 9. Storage Policy
 
 Use a conservative storage plan:
 
@@ -232,7 +276,7 @@ Suggested directories on the companion:
 
 If you prefer a different root, set it through `--storage-root`. The deploy path derives `maps`, `media`, and `events` under that root automatically.
 
-## 8. Mapping Workflow
+## 10. Mapping Workflow
 
 1. Bring up the Scout bridge and confirm scan plus pose.
 2. Launch SLAM on the companion.
@@ -242,18 +286,19 @@ If you prefer a different root, set it through `--storage-root`. The deploy path
 
 The map should be saved on the companion first, then optionally copied elsewhere.
 
-## 9. Patrol Workflow
+## 11. Patrol Workflow
 
 For patrol missions:
 
 - load the saved map with `map_server`
 - localize with `amcl`
 - define one or more room goals
+- replace the default dock approach placeholder with a real mapped pre-dock waypoint
 - capture stills or short clips at each goal
 - store media on the companion
 - optionally send a webhook or messaging notification after the route completes
 
-## 10. Dog Search Workflow
+## 12. Dog Search Workflow
 
 Recommended mission flow:
 
@@ -265,7 +310,7 @@ Recommended mission flow:
 
 This repo now treats heavyweight local Torch inference as offboard-only unless you prove otherwise on a stronger companion host.
 
-## 11. Headless Workflow
+## 13. Headless Workflow
 
 Use these commands as the supported operator flow:
 
@@ -303,7 +348,7 @@ untracked site inventory and enable the companion notification capability:
   --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
 ```
 
-## 12. Source References
+## 14. Source References
 
 - [Moorebot Scout product page](https://www.moorebot.com/en-ca/products/moorebot-scout)
 - [Moorebot Scout FAQ](https://www.moorebot.com/en-ca/pages/faq-for-moorebot-scout-2)

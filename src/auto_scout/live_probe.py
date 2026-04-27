@@ -25,15 +25,47 @@ DEFAULT_OBSERVE_MOTION_SECONDS = 0.0
 TOPIC_CANDIDATES = {
     "lidar_scan": ["/scan"],
     "camera_compressed": ["/camera/image_raw/compressed"],
+    "scout_tof": ["/SensorNode/tof"],
+    "tof_range": ["/scout/tof"],
+    "scout_imu": ["/SensorNode/imu"],
+    "imu_data": ["/scout/imu/data"],
     "odom": ["/MotorNode/baselink_odom_relative", "/MotorNode/vio_odom_relative", "/odom"],
     "vendor_cmd_vel": ["/cmd_vel_force", "/cmd_vel"],
+    "planner_cmd_vel": ["/scout/cmd_vel_planner"],
+    "autonomy_cmd_vel": ["/scout/cmd_vel_companion"],
+    "safety_state": ["/scout/safety_state"],
+    "battery_status": ["/SensorNode/simple_battery_status"],
+    "battery_guard_state": ["/scout/battery_guard_state"],
+    "vendor_dock_status": ["/CoreNode/going_home_status"],
 }
 
 TOPIC_TYPES = {
     "lidar_scan": "sensor_msgs/LaserScan",
     "camera_compressed": "sensor_msgs/CompressedImage",
+    "scout_tof": "sensor_msgs/Range",
+    "tof_range": "sensor_msgs/Range",
+    "scout_imu": "sensor_msgs/Imu",
+    "imu_data": "sensor_msgs/Imu",
     "odom": "nav_msgs/Odometry",
     "vendor_cmd_vel": "geometry_msgs/Twist",
+    "planner_cmd_vel": "geometry_msgs/Twist",
+    "autonomy_cmd_vel": "geometry_msgs/Twist",
+    "safety_state": "std_msgs/String",
+    "battery_status": "roller_eye/status",
+    "battery_guard_state": "std_msgs/String",
+    "vendor_dock_status": "std_msgs/Int32",
+}
+
+SENSOR_TOPIC_KEYS = ["scout_tof", "tof_range", "scout_imu", "imu_data"]
+COMMAND_TOPIC_KEYS = ["vendor_cmd_vel", "planner_cmd_vel", "autonomy_cmd_vel", "safety_state"]
+BATTERY_TOPIC_KEYS = ["battery_status", "battery_guard_state", "vendor_dock_status"]
+
+SERVICE_CANDIDATES = {
+    "vendor_low_battery_dock": ["/nav_low_bat"],
+}
+
+SERVICE_TYPES = {
+    "vendor_low_battery_dock": "roller_eye/nav_low_bat",
 }
 
 DEVICE_CANDIDATES = {
@@ -238,6 +270,10 @@ def _candidate_devices(role_settings, key):
     return values
 
 
+def _candidate_services(key):
+    return list(SERVICE_CANDIDATES.get(key, []))
+
+
 def _device_exists(executor, path):
     result = executor.run("test -e {} && echo present || echo missing".format(shlex.quote(path)), check=False)
     return result.ok and "present" in result.stdout
@@ -284,6 +320,16 @@ def _topic_details(executor, topic_name):
         "subscribers": topic_info.get("subscribers", []),
         "hz": _parse_rate(rate.stdout),
         "sample": sample.stdout,
+    }
+
+
+def _service_details(executor, service_name):
+    result = executor.run("timeout 5s rosservice type {}".format(shlex.quote(service_name)), check=False)
+    service_type = (result.stdout or "").strip() if result.ok else None
+    return {
+        "name": service_name,
+        "available": result.ok and bool(service_type),
+        "type": service_type,
     }
 
 
@@ -359,7 +405,7 @@ def _compare_site_config(site_config, observed, inferred_capabilities):
             }
         )
 
-    for topic_key in ["odom", "vendor_cmd_vel", "lidar_scan", "camera_compressed"]:
+    for topic_key in ["odom", "vendor_cmd_vel", "lidar_scan", "camera_compressed"] + SENSOR_TOPIC_KEYS:
         observed_topic = observed.get("topics", {}).get(topic_key, {})
         suggested = observed_topic.get("selected")
         current = role_topic(scout, topic_key)
@@ -444,6 +490,7 @@ def probe_scout_capabilities(
             "ros_environment": {},
             "devices": {},
             "topics": {},
+            "services": {},
             "nodes": [],
             "motion_observation": None,
             "command_exercise": None,
@@ -451,6 +498,8 @@ def probe_scout_capabilities(
         "inferred_capabilities": {
             "camera": None,
             "scan": None,
+            "tof": None,
+            "imu": None,
             "pose": None,
             "motion": None,
             "vendor_bridge": None,
@@ -473,6 +522,8 @@ def probe_scout_capabilities(
     topic_names = {line.strip() for line in topic_list_result.stdout.splitlines() if line.strip()}
     node_list_result = executor.run("timeout 8s rosnode list", check=False)
     payload["observed"]["nodes"] = [line.strip() for line in node_list_result.stdout.splitlines() if line.strip()]
+    service_list_result = executor.run("timeout 8s rosservice list", check=False)
+    service_names = {line.strip() for line in service_list_result.stdout.splitlines() if line.strip()} if service_list_result.ok else set()
 
     for device_name in ["camera", "lidar"]:
         payload["observed"]["devices"][device_name] = _check_device(
@@ -482,7 +533,7 @@ def probe_scout_capabilities(
         )
 
     selected_topics = {}
-    for topic_key in ["lidar_scan", "camera_compressed", "odom", "vendor_cmd_vel"]:
+    for topic_key in ["lidar_scan", "camera_compressed", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS:
         topic_entry = {
             "configured": role_topic(scout, topic_key),
             "selected": None,
@@ -495,6 +546,18 @@ def probe_scout_capabilities(
                 break
         payload["observed"]["topics"][topic_key] = topic_entry
         selected_topics[topic_key] = topic_entry["selected"]
+
+    for service_key in SERVICE_CANDIDATES:
+        service_entry = {
+            "selected": None,
+            "details": None,
+        }
+        for candidate in _candidate_services(service_key):
+            if candidate in service_names:
+                service_entry["selected"] = candidate
+                service_entry["details"] = _service_details(executor, candidate)
+                break
+        payload["observed"]["services"][service_key] = service_entry
 
     odom_details = payload["observed"]["topics"]["odom"].get("details") or {}
     if odom_details.get("sample"):
@@ -517,11 +580,35 @@ def probe_scout_capabilities(
 
     lidar_details = payload["observed"]["topics"]["lidar_scan"].get("details") or {}
     camera_details = payload["observed"]["topics"]["camera_compressed"].get("details") or {}
+    scout_tof_details = payload["observed"]["topics"]["scout_tof"].get("details") or {}
+    tof_range_details = payload["observed"]["topics"]["tof_range"].get("details") or {}
+    scout_imu_details = payload["observed"]["topics"]["scout_imu"].get("details") or {}
+    imu_data_details = payload["observed"]["topics"]["imu_data"].get("details") or {}
     payload["inferred_capabilities"]["scan"] = bool(
         selected_topics.get("lidar_scan") and lidar_details.get("type") == TOPIC_TYPES["lidar_scan"]
     )
     payload["inferred_capabilities"]["camera"] = bool(
         selected_topics.get("camera_compressed") or payload["observed"]["devices"]["camera"].get("exists")
+    )
+    payload["inferred_capabilities"]["tof"] = bool(
+        (
+            selected_topics.get("scout_tof")
+            and scout_tof_details.get("type") == TOPIC_TYPES["scout_tof"]
+        )
+        or (
+            selected_topics.get("tof_range")
+            and tof_range_details.get("type") == TOPIC_TYPES["tof_range"]
+        )
+    )
+    payload["inferred_capabilities"]["imu"] = bool(
+        (
+            selected_topics.get("scout_imu")
+            and scout_imu_details.get("type") == TOPIC_TYPES["scout_imu"]
+        )
+        or (
+            selected_topics.get("imu_data")
+            and imu_data_details.get("type") == TOPIC_TYPES["imu_data"]
+        )
     )
     payload["inferred_capabilities"]["vendor_bridge"] = "/MotorNode" in payload["observed"]["nodes"]
 

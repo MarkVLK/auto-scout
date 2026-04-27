@@ -263,8 +263,21 @@ class ValidationCliTest(unittest.TestCase):
 
     def test_default_site_config_uses_diff_drive_model_and_placeholder_hosts(self):
         site_config = default_site_config()
+        scout = site_config["roles"]["scout"]
 
-        self.assertEqual(site_config["roles"]["scout"]["motion"]["drive_model"], "diff")
+        self.assertEqual(scout["motion"]["drive_model"], "diff")
+        self.assertEqual(scout["topics"]["scout_tof"], "/SensorNode/tof")
+        self.assertEqual(scout["topics"]["tof_range"], "/scout/tof")
+        self.assertEqual(scout["topics"]["scout_imu"], "/SensorNode/imu")
+        self.assertEqual(scout["topics"]["imu_data"], "/scout/imu/data")
+        self.assertEqual(scout["topics"]["planner_cmd_vel"], "/scout/cmd_vel_planner")
+        self.assertEqual(scout["topics"]["safety_state"], "/scout/safety_state")
+        self.assertEqual(scout["topics"]["battery_status"], "/SensorNode/simple_battery_status")
+        self.assertEqual(scout["topics"]["battery_guard_state"], "/scout/battery_guard_state")
+        self.assertEqual(scout["topics"]["battery_guard_control"], "/scout/battery_guard_control")
+        self.assertEqual(scout["topics"]["vendor_dock_status"], "/CoreNode/going_home_status")
+        self.assertTrue(scout["capabilities"]["tof"])
+        self.assertTrue(scout["capabilities"]["imu"])
         self.assertTrue(site_config["roles"]["scout"]["ssh"]["host"].endswith(".invalid"))
         self.assertTrue(site_config["roles"]["companion"]["ssh"]["host"].endswith(".invalid"))
 
@@ -465,7 +478,10 @@ class ValidationCliTest(unittest.TestCase):
         self.assertNotIn("moorebot-scout.local", start_script)
         self.assertIn('<arg name="site_file" default="$(find auto-scout)/config/site.yaml" />', companion_launch)
         self.assertIn('<arg name="localization_mode" default="false" />', companion_launch)
+        self.assertIn('name="battery_map_return_controller"', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)
+        self.assertIn('<arg name="planner_cmd_vel" default="/scout/cmd_vel_planner"/>', navigation_launch)
+        self.assertIn('<remap from="cmd_vel" to="$(arg planner_cmd_vel)"/>', navigation_launch)
         self.assertIn('<param name="odom_alpha5" value="0.2"/>', navigation_launch)
         self.assertIn("AUTO_SCOUT_ROS_MASTER_URI=http://<scout-host-or-ip>:11311", env_example)
         self.assertIn("AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml", env_example)

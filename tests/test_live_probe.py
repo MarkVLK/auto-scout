@@ -33,9 +33,26 @@ class FakeRunner:
                 stdout="ROS_MASTER_URI=http://scout.example.test:11311\nROS_HOSTNAME=scout.example.test\nROS_IP=\n",
             ),
             "rostopic list": FakeCommandResult(
-                stdout="/scan\n/camera/image_raw/compressed\n/MotorNode/baselink_odom_relative\n/cmd_vel_force\n",
+                stdout=(
+                    "/scan\n"
+                    "/camera/image_raw/compressed\n"
+                    "/SensorNode/tof\n"
+                    "/scout/tof\n"
+                    "/SensorNode/imu\n"
+                    "/scout/imu/data\n"
+                    "/MotorNode/baselink_odom_relative\n"
+                    "/cmd_vel_force\n"
+                    "/scout/cmd_vel_planner\n"
+                    "/scout/cmd_vel_companion\n"
+                    "/scout/safety_state\n"
+                    "/SensorNode/simple_battery_status\n"
+                    "/scout/battery_guard_state\n"
+                    "/CoreNode/going_home_status\n"
+                ),
             ),
             "rosnode list": FakeCommandResult(stdout="/MotorNode\n"),
+            "rosservice list": FakeCommandResult(stdout="/nav_low_bat\n"),
+            "rosservice type /nav_low_bat": FakeCommandResult(stdout="roller_eye/nav_low_bat\n"),
             "test -e /dev/video0": FakeCommandResult(stdout="present\n"),
             "test -e /dev/ttyS4": FakeCommandResult(stdout="present\n"),
             "test -e /dev/ttyUSB0": FakeCommandResult(stdout="missing\n"),
@@ -45,6 +62,18 @@ class FakeRunner:
             "rostopic info /camera/image_raw/compressed": FakeCommandResult(stdout="Type: sensor_msgs/CompressedImage\nPublishers:\n * /camera\nSubscribers:\n"),
             "rostopic hz -w 5 /camera/image_raw/compressed": FakeCommandResult(ok=False, stdout="average rate: 5.0\n"),
             "rostopic echo -n 1 /camera/image_raw/compressed": FakeCommandResult(stdout="header:\n"),
+            "rostopic info /SensorNode/tof": FakeCommandResult(stdout="Type: sensor_msgs/Range\nPublishers:\n * /SensorNode\nSubscribers:\n"),
+            "rostopic hz -w 5 /SensorNode/tof": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
+            "rostopic echo -n 1 /SensorNode/tof": FakeCommandResult(stdout="range: 0.5\n"),
+            "rostopic info /scout/tof": FakeCommandResult(stdout="Type: sensor_msgs/Range\nPublishers:\n * /scout_tof_bridge\nSubscribers:\n"),
+            "rostopic hz -w 5 /scout/tof": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
+            "rostopic echo -n 1 /scout/tof": FakeCommandResult(stdout="range: 0.5\n"),
+            "rostopic info /SensorNode/imu": FakeCommandResult(stdout="Type: sensor_msgs/Imu\nPublishers:\n * /SensorNode\nSubscribers:\n"),
+            "rostopic hz -w 5 /SensorNode/imu": FakeCommandResult(ok=False, stdout="average rate: 50.0\n"),
+            "rostopic echo -n 1 /SensorNode/imu": FakeCommandResult(stdout="orientation:\n  w: 1.0\n"),
+            "rostopic info /scout/imu/data": FakeCommandResult(stdout="Type: sensor_msgs/Imu\nPublishers:\n * /scout_imu_bridge\nSubscribers:\n"),
+            "rostopic hz -w 5 /scout/imu/data": FakeCommandResult(ok=False, stdout="average rate: 50.0\n"),
+            "rostopic echo -n 1 /scout/imu/data": FakeCommandResult(stdout="orientation:\n  w: 1.0\n"),
             "rostopic info /MotorNode/baselink_odom_relative": FakeCommandResult(stdout="Type: nav_msgs/Odometry\nPublishers:\n * /MotorNode\nSubscribers:\n"),
             "rostopic hz -w 5 /MotorNode/baselink_odom_relative": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
             "rostopic echo -n 1 /MotorNode/baselink_odom_relative": FakeCommandResult(
@@ -58,6 +87,24 @@ class FakeRunner:
             "rostopic info /cmd_vel_force": FakeCommandResult(stdout="Type: geometry_msgs/Twist\nPublishers:\nSubscribers:\n * /MotorNode\n"),
             "rostopic hz -w 5 /cmd_vel_force": FakeCommandResult(ok=False, stdout="average rate: 0.0\n"),
             "rostopic echo -n 1 /cmd_vel_force": FakeCommandResult(stdout="linear:\n  x: 0.0\n"),
+            "rostopic info /scout/cmd_vel_planner": FakeCommandResult(stdout="Type: geometry_msgs/Twist\nPublishers:\nSubscribers:\n * /scout_safety_filter\n"),
+            "rostopic hz -w 5 /scout/cmd_vel_planner": FakeCommandResult(ok=False, stdout="average rate: 0.0\n"),
+            "rostopic echo -n 1 /scout/cmd_vel_planner": FakeCommandResult(stdout="linear:\n  x: 0.0\n"),
+            "rostopic info /scout/cmd_vel_companion": FakeCommandResult(stdout="Type: geometry_msgs/Twist\nPublishers:\n * /scout_safety_filter\nSubscribers:\n * /scout_motion_bridge\n"),
+            "rostopic hz -w 5 /scout/cmd_vel_companion": FakeCommandResult(ok=False, stdout="average rate: 0.0\n"),
+            "rostopic echo -n 1 /scout/cmd_vel_companion": FakeCommandResult(stdout="linear:\n  x: 0.0\n"),
+            "rostopic info /scout/safety_state": FakeCommandResult(stdout="Type: std_msgs/String\nPublishers:\n * /scout_safety_filter\nSubscribers:\n"),
+            "rostopic hz -w 5 /scout/safety_state": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
+            "rostopic echo -n 1 /scout/safety_state": FakeCommandResult(stdout='data: "{\\"state\\": \\"clear\\"}"\n'),
+            "rostopic info /SensorNode/simple_battery_status": FakeCommandResult(stdout="Type: roller_eye/status\nPublishers:\n * /SensorNode\nSubscribers:\n * /scout_battery_dock_guard\n"),
+            "rostopic hz -w 5 /SensorNode/simple_battery_status": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
+            "rostopic echo -n 1 /SensorNode/simple_battery_status": FakeCommandResult(stdout="status: [0, 82, 0]\n"),
+            "rostopic info /scout/battery_guard_state": FakeCommandResult(stdout="Type: std_msgs/String\nPublishers:\n * /scout_battery_dock_guard\nSubscribers:\n * /scout_safety_filter\n"),
+            "rostopic hz -w 5 /scout/battery_guard_state": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
+            "rostopic echo -n 1 /scout/battery_guard_state": FakeCommandResult(stdout='data: "{\\"mode\\": \\"idle\\"}"\n'),
+            "rostopic info /CoreNode/going_home_status": FakeCommandResult(stdout="Type: std_msgs/Int32\nPublishers:\n * /CoreNode\nSubscribers:\n * /scout_battery_dock_guard\n"),
+            "rostopic hz -w 5 /CoreNode/going_home_status": FakeCommandResult(ok=False, stdout="average rate: 0.0\n"),
+            "rostopic echo -n 1 /CoreNode/going_home_status": FakeCommandResult(stdout="data: 6\n"),
             "timeout 7s rostopic echo -p /MotorNode/baselink_odom_relative": FakeCommandResult(
                 ok=False,
                 stdout="%time,field.pose.pose.position.x,field.pose.pose.position.y,field.pose.pose.orientation.z\n1.0,0.0,0.0,0.0\n2.0,0.12,0.03,0.0\n",
@@ -98,9 +145,15 @@ class LiveProbeTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["inferred_capabilities"]["scan"])
         self.assertTrue(result["inferred_capabilities"]["camera"])
+        self.assertTrue(result["inferred_capabilities"]["tof"])
+        self.assertTrue(result["inferred_capabilities"]["imu"])
         self.assertTrue(result["inferred_capabilities"]["pose"])
         self.assertTrue(result["inferred_capabilities"]["motion"])
         self.assertEqual(result["config_mismatch_suggestions"], [])
+        self.assertEqual(
+            result["observed"]["services"]["vendor_low_battery_dock"]["details"]["type"],
+            "roller_eye/nav_low_bat",
+        )
         self.assertEqual(result["observed"]["command_exercise"]["forward_axis"], "y")
         self.assertEqual(result["observed"]["command_exercise"]["dominant_axis"], "x")
         self.assertGreater(result["observed"]["command_exercise"]["delta_x"], 0.0)

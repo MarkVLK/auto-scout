@@ -26,6 +26,11 @@ This document captures what was verified against public Moorebot and ROS sources
   - build against Ubuntu 18.04
   - Scout exposes a custom `rollereye` Python API
   - public topics include `/CoreNode/h264`, `/SensorNode/imu`, and `/SensorNode/tof`
+- Rooted-unit inspection for this project found the vendor low-battery docking surface:
+  - `/SensorNode/simple_battery_status` carries battery percent and charging state in the vendor `roller_eye/status` array
+  - `/nav_low_bat` is a vendor docking service
+  - `/CoreNode/going_home_status` reports vendor docking state
+  - `/CoreNode/backing_up` must not be subscribed to or echoed because vendor code treats subscription as a trigger path
 
 ### ROS distro compatibility
 
@@ -61,6 +66,7 @@ The Scout is still useful as:
 
 - the mobile base
 - the camera platform
+- a source of built-in ToF and IMU observations
 - the dock-aware robot
 - a place to run lightweight bridge code
 
@@ -88,11 +94,15 @@ Responsibilities:
 
 - expose motion primitives
 - bridge camera and sensor streams
+- normalize `/SensorNode/tof` and `/SensorNode/imu` into project topics
+- own the low-battery guard and final vendor docking handoff
+- gate planner velocity commands with close-range ToF and `/scan` freshness checks
 - publish or bridge LD19 scans if the LiDAR is physically attached there
 - capture stills and short clips when asked
 - optionally surface built-in dog detection or other vendor AI events
 
 Do not rely on Scout-side Torch inference by default.
+Do not treat camera, ToF, or IMU as a substitute for the LD19 in normal autonomous mapping or patrol.
 
 ### Companion side
 
@@ -106,6 +116,7 @@ Recommended baseline:
 - `amcl`
 - `move_base`
 - `explore_lite`
+- `battery_map_return_controller.py` for low-battery map-assisted return to the dock approach waypoint when localization is healthy
 
 Fallback if needed:
 
@@ -143,6 +154,9 @@ Local Scout storage should be treated as a cache, not the source of truth.
 | Localization | Not recommended | `amcl` |
 | Path planning | Not recommended | `move_base` |
 | Autonomous exploration | Not recommended | `explore_lite` |
+| Close-range safety | ToF-backed command gate | Monitor `/scout/safety_state` |
+| Low-battery return | Scout-local guard plus vendor `/nav_low_bat` final docking | Optional map return to dock approach waypoint before vendor handoff |
+| IMU | Bridge to `/scout/imu/data` | Use later only after data quality is proven |
 | Dog detection | Built-in AI bridge if available | Offboard detector if needed |
 | Media archive | Temporary only | Primary |
 
@@ -170,8 +184,15 @@ Recommended flow:
 2. Localize with `amcl`.
 3. Maintain a room graph in YAML.
 4. Patrol named room goals.
-5. Capture media at each room.
-6. Store media on the companion and mirror elsewhere if needed.
+5. Keep the Scout-local low-battery guard active during patrol.
+6. Capture media at each room.
+7. Store media on the companion and mirror elsewhere if needed.
+
+Low-battery return:
+
+- The Scout-local guard is the authority and always falls back to vendor `/nav_low_bat`.
+- The companion may claim map return only when localization, `move_base`, fresh pose, and the configured dock approach waypoint are all healthy.
+- Final physical docking remains the vendor routine, not a hand-rolled visual/ToF docking controller.
 
 ### Find the dog
 
@@ -192,14 +213,18 @@ The repo has been updated to reflect these conclusions:
 - docs now describe a companion-first ROS1 architecture
 - config now includes runtime and storage assumptions
 - launch files are less dependent on nonexistent local package wiring
+- Scout runtime now normalizes ToF/IMU topics and inserts a safety filter between `move_base` and the vendor motion bridge
+- Scout runtime now includes a low-battery dock guard, and companion runtime now includes a map-return controller for the dock approach leg
 - code comments and compatibility checks now warn against unsupported Scout-side assumptions
 - dog detection code now has an external-detection path so the Scout's built-in AI or a companion detector can drive the mission
 
 ## 7. Open Risks
 
 - The public Scout materials do not clearly document a public odometry topic for third-party rooted use.
-- Docking behavior may still depend on vendor firmware logic that is not fully documented.
+- Docking behavior depends on vendor firmware logic. The repo can trigger and monitor `/nav_low_bat`, but live docking still must be staged near the dock before `roles.scout.capabilities.dock` is enabled.
+- The mapped dock approach waypoint defaults to `charging_station`; it must be replaced with a real pre-dock waypoint after mapping.
 - A top-mounted LD19 may see furniture differently than the stock low camera and ToF stack.
+- The checked-in `tof_link` is initially colocated with the camera frame and should be measured on hardware before treating range geometry as calibrated.
 - Mecanum wheel slip can hurt localization quality on smooth floors.
 - Messaging integrations such as WhatsApp or Signal are likely easier through companion-side webhooks than from the Scout itself.
 - A specific rooted unit may expose vendor APIs, ROS topics, or both; do not assume that joining the Scout's ROS master is the correct first integration step.

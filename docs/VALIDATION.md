@@ -69,6 +69,8 @@ the smoke-loop gate to pass:
 - `config/site.yaml` sample inventory structure and declared capabilities
 - `config/missions/smoke_loop.yaml` mission contract
 - launch file structure for `scout-runtime` and `companion-runtime`
+- Scout built-in sensor topics, battery guard topics, safety settings, and planner-to-safety-filter command routing
+- hybrid low-battery return defaults, including the Scout-local guard node, companion map-return controller, and configured dock approach waypoint
 - service/container files for the reset deployment model
 - the companion container contract:
   one host-networked ROS1 companion container with the expected Melodic launch path
@@ -81,9 +83,9 @@ the smoke-loop gate to pass:
 - role declarations in the effective site inventory
 - configured hostname resolution, including companion-container lookup of Scout and Pi `.local` names when the container is running
 - companion storage directories and container stack expectations
-- Scout bridge, motion, camera, and scan capability declarations
+- Scout bridge, motion, camera, scan, ToF, and IMU capability declarations
 - Scout LiDAR serial-device presence and whether the configured service user can access it
-- whether live Scout probing matches the declared vendor topics, ROS networking, and capabilities
+- whether live Scout probing matches the declared vendor topics, normalized sensor topics, battery/dock topics, `/nav_low_bat` service type, ROS networking, and capabilities
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
 
@@ -99,6 +101,8 @@ The most important runtime gate is pose:
 The most important runtime sanity check after that is live mismatch detection:
 
 - if live probe contradicts `roles.scout.devices.lidar`, `roles.scout.capabilities.pose`, `roles.scout.capabilities.motion`, `roles.scout.topics.odom`, or `roles.scout.topics.vendor_cmd_vel`, treat that as a real integration failure
+- if live probe cannot see the expected ToF/IMU source or normalized topics, treat that as a built-in sensor integration gap, not as a reason to proceed without LiDAR
+- if live probe cannot see `/SensorNode/simple_battery_status`, `/CoreNode/going_home_status`, or `/nav_low_bat`, do not treat low-battery dock return as validated
 - if the cross-host ROS settings still advertise `localhost`, treat that as a deployment bug rather than a hardware limitation
 
 For the validated rooted Scout path, a common serial-access failure mode is a LiDAR device owned by `root:dialout` while the configured service user is not in `dialout`. `./auto-scout validate scout` now reports that explicitly.
@@ -111,6 +115,8 @@ Use probe before deploy or full validation when you have Scout access:
 ./auto-scout probe scout --observe-motion 15
 ./auto-scout probe scout --exercise-cmd-vel
 ```
+
+The probe reports both vendor source topics such as `/SensorNode/tof` and normalized project topics such as `/scout/tof`, `/scout/imu/data`, `/scout/safety_state`, and `/scout/battery_guard_state`. It also passively checks the `/nav_low_bat` service type; it does not call the docking service.
 
 Use `--write-site` only when you want to apply the generated site-inventory suggestions automatically:
 
@@ -125,13 +131,19 @@ If you run validation with `--no-live-probe`, the Scout serial-access probe is s
 The validator's regression coverage lives in:
 
 ```bash
-python3 -m pytest tests/test_validation_cli.py
+python3 -m pytest
 ```
 
-If `pytest` is not installed in the current environment, the same test module also runs under:
+For focused validation work, run:
 
 ```bash
-python3 -m unittest tests/test_validation_cli.py
+python3 -m pytest tests/test_validation_cli.py tests/test_live_probe.py tests/test_scout_safety_filter.py tests/test_scout_battery_dock_guard.py tests/test_battery_map_return_controller.py
+```
+
+If `pytest` is not installed in the current environment, the maintained test modules also run under:
+
+```bash
+python3 -m unittest tests.test_validation_cli tests.test_live_probe tests.test_scout_safety_filter tests.test_scout_battery_dock_guard tests.test_battery_map_return_controller
 ```
 
 ## Retired Scripts

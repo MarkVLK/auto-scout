@@ -16,7 +16,19 @@
   <node name="scout_camera_driver" pkg="auto-scout" type="scout_camera_driver.py"
         args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
+  <node name="scout_tof_bridge" pkg="auto-scout" type="scout_tof_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+  <node name="scout_imu_bridge" pkg="auto-scout" type="scout_imu_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
   <node name="scout_odom_bridge" pkg="auto-scout" type="scout_odom_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+  <node name="scout_battery_dock_guard" pkg="auto-scout" type="scout_battery_dock_guard.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+  <node name="scout_safety_filter" pkg="auto-scout" type="scout_safety_filter.py"
         args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
   <node name="scout_motion_bridge" pkg="auto-scout" type="scout_motion_bridge.py"

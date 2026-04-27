@@ -49,6 +49,7 @@ Pay attention to:
 - whether hostname targets such as `moorebot-scout.local` and `auto-scout-pi5.local` resolve from the Mac, Pi host, Scout, and companion container before they are used as ROS endpoints
 - whether pose, motion, notify, and dock capabilities are declared correctly
 - whether the Scout probe found the expected vendor odometry and motion topics
+- whether the Scout probe can passively see the battery status topic, battery guard state topic, vendor dock status topic, and `/nav_low_bat` service type
 - whether mapping, patrol, and smoke-loop readiness are reported as `PASS`, `WARN`, or `FAIL`
 
 If you only want to validate the repo wiring without probing the current machine, use:
@@ -64,16 +65,22 @@ Before touching autonomy:
 - confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
 - confirm the camera or video bridge works
 - confirm the LD19 publishes `/scan`
+- confirm vendor ToF and IMU are normalized to `/scout/tof` and `/scout/imu/data`
+- confirm `/scout/safety_state` is being published by `scout_safety_filter.py`
+- confirm `/scout/battery_guard_state` is being published by `scout_battery_dock_guard.py`
+- confirm `/SensorNode/simple_battery_status`, `/CoreNode/going_home_status`, and `/nav_low_bat` are visible passively before any live docking test
 - verify the actual LD19 mounting offset from `base_link` to `base_laser` before mapping; `urdf/scout.urdf` is the source of truth for that transform
 - on the validated rooted Scout path, keep the Scout workspace under `/userdata/catkin_ws/src/auto-scout`
 - on the validated rooted Scout path, treat `/dev/ttyS4` as the default Scout-attached LD19 device
 - use the repo's built-in `ld19_lidar_driver.py` as the supported Scout-side LD19 path; do not treat building upstream C++ LD19 packages on the Scout as the baseline bring-up
 - if the Scout still has an older external `ldlidar.service`, stop and disable it before launching the repo-managed Scout runtime so two processes do not fight over `/dev/ttyS4`
 - confirm you have a usable pose or odometry source by running `./auto-scout probe scout --observe-motion 15`
-- confirm the Scout-side compatibility bridges expose standard `/odom` and `/scout/cmd_vel_companion`
+- confirm the Scout-side compatibility bridges expose standard `/odom`, `/scout/cmd_vel_planner`, `/scout/cmd_vel_companion`, and `/cmd_vel_force`
 
 If pose is missing, stop here. `slam_gmapping` and `move_base` will not behave well without it.
 Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is still unproven.
+Do not treat camera, ToF, or IMU as a LiDAR fallback for normal autonomy; the current safety filter stops or slows commands when ToF is close and stops command flow when `/scan` is stale.
+Do not call `/nav_low_bat` during bring-up unless the robot is near the dock and an operator has explicitly confirmed a live docking test.
 
 ## 3. Start Mapping On The Companion
 
@@ -107,7 +114,11 @@ rosrun map_server map_saver -f /srv/auto-scout/maps/house_map
 roslaunch auto-scout navigation.launch map_file:=/srv/auto-scout/maps/house_map.yaml
 ```
 
+`move_base` publishes raw planner output to `/scout/cmd_vel_planner`. The Scout-side safety filter publishes only approved commands to `/scout/cmd_vel_companion`, which `scout_motion_bridge.py` remaps to `/cmd_vel_force`.
+
 Then define room goals in [config/scout_config.yaml](../config/scout_config.yaml).
+
+After the map is reliable, replace the default `navigation.dock_approach_waypoint: "charging_station"` with a measured pre-dock waypoint. During low battery, the Scout-local guard gives the companion a short window to claim map return, drive to that approach waypoint, and then hand final docking back to the vendor `/nav_low_bat` routine. If the companion stack is unavailable or fails, Scout falls back directly to vendor docking.
 
 ## 6. Patrol Rooms
 
@@ -115,6 +126,7 @@ Recommended patrol flow:
 
 - localize with `amcl`
 - move room to room with `move_base`
+- keep the Scout-local battery guard running; low battery overrides normal patrol
 - capture a still or short clip at each room
 - store media on the companion
 - optionally push a webhook after the patrol finishes

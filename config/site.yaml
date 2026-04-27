@@ -27,7 +27,18 @@ roles:
       lidar_scan: "/scan"
       odom: "/MotorNode/baselink_odom_relative"
       vendor_cmd_vel: "/cmd_vel_force"
+      planner_cmd_vel: "/scout/cmd_vel_planner"
       autonomy_cmd_vel: "/scout/cmd_vel_companion"
+      safety_state: "/scout/safety_state"
+      battery_status: "/SensorNode/simple_battery_status"
+      battery_guard_state: "/scout/battery_guard_state"
+      battery_guard_control: "/scout/battery_guard_control"
+      vendor_dock_status: "/CoreNode/going_home_status"
+      runtime_request: "/scout/runtime/request"
+      scout_tof: "/SensorNode/tof"
+      tof_range: "/scout/tof"
+      scout_imu: "/SensorNode/imu"
+      imu_data: "/scout/imu/data"
       vendor_dog_detection: "/scout/dog_detection_external"
     motion:
       forward_axis: "y"
@@ -41,6 +52,8 @@ roles:
     capabilities:
       camera: true
       scan: true
+      tof: true
+      imu: true
       pose: true
       motion: true
       dock: false

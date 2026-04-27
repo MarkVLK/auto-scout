@@ -70,6 +70,11 @@ catkin_install_python(PROGRAMS
   src/map_file_guard.py
   src/ld19_lidar_driver.py
   src/scout_camera_driver.py
+  src/scout_tof_bridge.py
+  src/scout_imu_bridge.py
+  src/scout_safety_filter.py
+  src/scout_battery_dock_guard.py
+  src/battery_map_return_controller.py
   src/scout_motion_bridge.py
   src/scout_odom_bridge.py
   src/dog_detection_module.py

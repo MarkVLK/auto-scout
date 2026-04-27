@@ -11,6 +11,7 @@
 
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml"/>
   <arg name="autonomy_cmd_vel" default="/scout/cmd_vel_companion"/>
+  <arg name="planner_cmd_vel" default="/scout/cmd_vel_planner"/>
   <arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>
 
   <node name="map_file_guard" pkg="auto-scout" type="map_file_guard.py" output="screen" required="true">
@@ -58,7 +59,7 @@
 
   <!-- Path planning -->
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
-    <remap from="cmd_vel" to="$(arg autonomy_cmd_vel)"/>
+    <remap from="cmd_vel" to="$(arg planner_cmd_vel)"/>
     <rosparam file="$(find auto-scout)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
     <rosparam file="$(find auto-scout)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find auto-scout)/config/local_costmap_params.yaml" command="load"/>

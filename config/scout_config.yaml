@@ -28,10 +28,19 @@ topics:
   camera_compressed: "/camera/image_raw/compressed"
   odom: "/MotorNode/baselink_odom_relative"
   vendor_cmd_vel: "/cmd_vel_force"
+  planner_cmd_vel: "/scout/cmd_vel_planner"
   autonomy_cmd_vel: "/scout/cmd_vel_companion"
+  safety_state: "/scout/safety_state"
+  battery_status: "/SensorNode/simple_battery_status"
+  battery_guard_state: "/scout/battery_guard_state"
+  battery_guard_control: "/scout/battery_guard_control"
+  vendor_dock_status: "/CoreNode/going_home_status"
+  runtime_request: "/scout/runtime/request"
   scout_video_stream: "/CoreNode/h264"
   scout_imu: "/SensorNode/imu"
+  imu_data: "/scout/imu/data"
   scout_tof: "/SensorNode/tof"
+  tof_range: "/scout/tof"
   vendor_dog_detection: "/scout/dog_detection_external"
   external_dog_detection: "/scout/dog_detection_external"
 
@@ -88,9 +97,22 @@ schedules:
     active: false
 
 safety:
+  battery_guard_enabled: true
   min_battery_level: 20.0
+  critical_battery_level: 10.0
+  battery_reset_margin: 5.0
+  map_return_claim_timeout_seconds: 5.0
+  map_return_timeout_seconds: 180.0
+  dock_timeout_seconds: 180.0
+  dock_retry_count: 1
   max_obstacle_distance: 0.3
   emergency_stop_distance: 0.15
+  tof_stop_enabled: true
+  require_tof: false
+  tof_stale_timeout: 1.0
+  scan_watchdog_enabled: true
+  scan_stale_timeout: 1.0
+  caution_speed: 0.05
 
 lidar:
   port: "/dev/ttyS4"
@@ -124,6 +146,9 @@ navigation:
   yaw_goal_tolerance: 0.15
   planner_frequency: 1.0
   controller_frequency: 10.0
+  dock_approach_waypoint: "charging_station"
+  dock_approach_timeout_seconds: 180.0
+  pose_stale_timeout: 3.0
 
 mapping:
   map_resolution: 0.05

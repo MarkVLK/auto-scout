@@ -446,6 +446,42 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         inventory_issues.append(str(exc))
     if "drive_model" not in raw_scout_motion:
         inventory_issues.append("config/site.yaml must explicitly set roles.scout.motion.drive_model")
+    required_project_topics = [
+        "scout_tof",
+        "tof_range",
+        "scout_imu",
+        "imu_data",
+        "planner_cmd_vel",
+        "autonomy_cmd_vel",
+        "safety_state",
+        "battery_status",
+        "battery_guard_state",
+        "battery_guard_control",
+        "vendor_dock_status",
+        "runtime_request",
+    ]
+    project_topics = project_config.get("topics", {}) if isinstance(project_config.get("topics", {}), dict) else {}
+    for topic_name in required_project_topics:
+        if topic_name not in project_topics:
+            inventory_issues.append("config/scout_config.yaml must define topics.{}".format(topic_name))
+    required_safety_settings = [
+        "tof_stop_enabled",
+        "require_tof",
+        "tof_stale_timeout",
+        "scan_watchdog_enabled",
+        "scan_stale_timeout",
+        "caution_speed",
+        "battery_guard_enabled",
+        "min_battery_level",
+        "critical_battery_level",
+        "map_return_claim_timeout_seconds",
+        "dock_timeout_seconds",
+        "dock_retry_count",
+    ]
+    safety_settings = project_config.get("safety", {}) if isinstance(project_config.get("safety", {}), dict) else {}
+    for setting_name in required_safety_settings:
+        if setting_name not in safety_settings:
+            inventory_issues.append("config/scout_config.yaml must define safety.{}".format(setting_name))
 
     smoke_mission, mission_path = load_mission_config("smoke_loop")
     gate = evaluate_smoke_loop_gate(site_config, smoke_mission)
@@ -505,10 +541,14 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "scout_runtime_agent",
             "ld19_lidar_driver",
             "scout_camera_driver",
+            "scout_tof_bridge",
+            "scout_imu_bridge",
+            "scout_battery_dock_guard",
+            "scout_safety_filter",
             "scout_motion_bridge",
             "scout_odom_bridge",
         ],
-        "launch/companion_runtime.launch": ["companion_runtime_agent"],
+        "launch/companion_runtime.launch": ["companion_runtime_agent", "battery_map_return_controller"],
         "launch/navigation.launch": ["map_file_guard", "map_server", "amcl", "move_base"],
         "launch/slam_mapping.launch": ["robot_state_publisher", "slam_gmapping"],
     }
@@ -546,7 +586,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
 
         if urdf_root is not None:
             link_names = {link.attrib.get("name") for link in urdf_root.iter("link")}
-            for required_link in ["base_link", "base_laser"]:
+            for required_link in ["base_link", "base_laser", "camera_link", "tof_link", "imu_link"]:
                 if required_link not in link_names:
                     launch_issues.append("urdf/scout.urdf is missing link '{}'".format(required_link))
 
@@ -566,6 +606,22 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                     launch_issues.append("urdf/scout.urdf base_to_laser child must be base_laser")
                 if origin is None or origin.attrib.get("xyz") != "0.1 0 0.05" or origin.attrib.get("rpy") != "0 0 0":
                     launch_issues.append("urdf/scout.urdf base_to_laser origin must be xyz='0.1 0 0.05' rpy='0 0 0'")
+
+            tof_joint = next((joint for joint in joints if joint.attrib.get("name") == "base_to_tof"), None)
+            if tof_joint is None:
+                launch_issues.append("urdf/scout.urdf is missing fixed joint base_to_tof")
+            else:
+                parent = tof_joint.find("parent")
+                child = tof_joint.find("child")
+                origin = tof_joint.find("origin")
+                if tof_joint.attrib.get("type") != "fixed":
+                    launch_issues.append("urdf/scout.urdf base_to_tof must be a fixed joint")
+                if parent is None or parent.attrib.get("link") != "base_link":
+                    launch_issues.append("urdf/scout.urdf base_to_tof parent must be base_link")
+                if child is None or child.attrib.get("link") != "tof_link":
+                    launch_issues.append("urdf/scout.urdf base_to_tof child must be tof_link")
+                if origin is None or origin.attrib.get("xyz") != "0.075 0 0.04" or origin.attrib.get("rpy") != "0 0 0":
+                    launch_issues.append("urdf/scout.urdf base_to_tof origin must be xyz='0.075 0 0.04' rpy='0 0 0'")
 
             slam_root = launch_roots.get("launch/slam_mapping.launch")
             if slam_root is not None:
@@ -598,6 +654,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         launch_issues.append("launch/navigation.launch must expose odom_model_type from AUTO_SCOUT_ODOM_MODEL_TYPE")
     if 'name="odom_alpha5"' not in navigation_text:
         launch_issues.append("launch/navigation.launch must set odom_alpha5 for omni motion support")
+    if 'name="planner_cmd_vel"' not in navigation_text or '<remap from="cmd_vel" to="$(arg planner_cmd_vel)"/>' not in navigation_text:
+        launch_issues.append("launch/navigation.launch must route move_base output through planner_cmd_vel for Scout safety filtering")
 
     if launch_issues:
         report.add(
@@ -1278,6 +1336,43 @@ def _add_live_probe_check(report, site_config, effective_role, runtime_profile, 
             )
         )
 
+    observed_topics = probe_result.get("observed", {}).get("topics", {})
+    for label, topic_key in [
+        ("ToF source", "scout_tof"),
+        ("ToF normalized", "tof_range"),
+        ("IMU source", "scout_imu"),
+        ("IMU normalized", "imu_data"),
+        ("Battery status", "battery_status"),
+        ("Battery guard state", "battery_guard_state"),
+        ("Vendor dock status", "vendor_dock_status"),
+    ]:
+        observed_topic = observed_topics.get(topic_key, {})
+        selected_topic = observed_topic.get("selected")
+        details_topic = observed_topic.get("details") or {}
+        if selected_topic:
+            details.append(
+                "{} topic observed at {} ({})".format(
+                    label,
+                    selected_topic,
+                    details_topic.get("type", "unknown type"),
+                )
+            )
+        else:
+            details.append("{} topic was not observed.".format(label))
+
+    observed_services = probe_result.get("observed", {}).get("services", {})
+    vendor_dock_service = observed_services.get("vendor_low_battery_dock", {})
+    vendor_dock_details = vendor_dock_service.get("details") or {}
+    if vendor_dock_service.get("selected"):
+        details.append(
+            "Vendor low-battery dock service observed at {} ({})".format(
+                vendor_dock_service.get("selected"),
+                vendor_dock_details.get("type", "unknown type"),
+            )
+        )
+    else:
+        details.append("Vendor low-battery dock service /nav_low_bat was not observed.")
+
     if mismatch_items:
         details.extend(
             "{} -> {} ({})".format(item["path"], item.get("suggested"), item.get("reason"))
@@ -1420,13 +1515,32 @@ def _add_scout_checks(report, site_config, runtime_profile):
         issues.append("scout.capabilities.camera must be true")
     if not capabilities.get("scan", False):
         issues.append("scout.capabilities.scan must be true")
+    if not capabilities.get("tof", False):
+        issues.append("scout.capabilities.tof must be true")
+    if not capabilities.get("imu", False):
+        issues.append("scout.capabilities.imu must be true")
     if not capabilities.get("motion", False):
         issues.append("scout.capabilities.motion must be true")
 
     for name in ["camera", "lidar"]:
         if name not in devices:
             issues.append("scout.devices.{} is missing".format(name))
-    for name in ["odom", "vendor_cmd_vel", "autonomy_cmd_vel"]:
+    for name in [
+        "odom",
+        "vendor_cmd_vel",
+        "planner_cmd_vel",
+        "autonomy_cmd_vel",
+        "safety_state",
+        "battery_status",
+        "battery_guard_state",
+        "battery_guard_control",
+        "vendor_dock_status",
+        "runtime_request",
+        "scout_tof",
+        "tof_range",
+        "scout_imu",
+        "imu_data",
+    ]:
         if name not in topics:
             issues.append("scout.topics.{} is missing".format(name))
     if not ros_settings.get("advertise_host"):
@@ -1439,7 +1553,7 @@ def _add_scout_checks(report, site_config, runtime_profile):
         issues.append(str(exc))
 
     status = "fail" if issues else "pass"
-    summary = "Scout inventory declares the required bridge, motion, camera, and scan capabilities"
+    summary = "Scout inventory declares the required bridge, motion, camera, scan, and built-in sensor capabilities"
     details = issues
 
     if not issues and runtime_profile == "likely_scout":

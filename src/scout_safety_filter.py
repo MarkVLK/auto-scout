@@ -1,0 +1,396 @@
+#!/usr/bin/env python2
+"""Gate planner velocity commands with Scout-local safety sensors."""
+
+from __future__ import print_function
+
+import argparse
+import json
+import math
+
+from config_utils import load_scout_config
+from scout_runtime_config import load_site_config
+from scout_runtime_config import scout_runtime_topic
+
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ["1", "true", "yes", "on"]
+
+
+def _finite_number(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
+
+
+class ScoutSafetyLogic(object):
+    """Pure command-gating logic shared by the ROS node and unit tests."""
+
+    def __init__(
+        self,
+        twist_type=None,
+        tof_stop_enabled=True,
+        require_tof=False,
+        max_obstacle_distance=0.3,
+        emergency_stop_distance=0.15,
+        tof_stale_timeout=1.0,
+        scan_watchdog_enabled=True,
+        scan_stale_timeout=1.0,
+        caution_speed=0.05,
+    ):
+        self.twist_type = twist_type
+        self.tof_stop_enabled = bool(tof_stop_enabled)
+        self.require_tof = bool(require_tof)
+        self.max_obstacle_distance = float(max_obstacle_distance)
+        self.emergency_stop_distance = float(emergency_stop_distance)
+        self.tof_stale_timeout = float(tof_stale_timeout)
+        self.scan_watchdog_enabled = bool(scan_watchdog_enabled)
+        self.scan_stale_timeout = float(scan_stale_timeout)
+        self.caution_speed = float(caution_speed)
+        self.battery_guard_block_modes = set(["return_required", "vendor_docking", "failed", "charging"])
+
+    def _new_twist(self, template):
+        twist_type = self.twist_type or template.__class__
+        return twist_type()
+
+    def copy_twist(self, template):
+        result = self._new_twist(template)
+        result.linear.x = template.linear.x
+        result.linear.y = template.linear.y
+        result.linear.z = template.linear.z
+        result.angular.x = template.angular.x
+        result.angular.y = template.angular.y
+        result.angular.z = template.angular.z
+        return result
+
+    def zero_twist(self, template):
+        result = self._new_twist(template)
+        result.linear.x = 0.0
+        result.linear.y = 0.0
+        result.linear.z = 0.0
+        result.angular.x = 0.0
+        result.angular.y = 0.0
+        result.angular.z = 0.0
+        return result
+
+    def _decision(self, command, state, blocked, reason, tof_range, tof_age, scan_age):
+        return {
+            "command": command,
+            "state": state,
+            "blocked": bool(blocked),
+            "reason": reason,
+            "tof_range": tof_range,
+            "tof_age": tof_age,
+            "scan_age": scan_age,
+        }
+
+    def decide(
+        self,
+        command,
+        tof_seen=False,
+        tof_range=None,
+        tof_age=None,
+        scan_seen=False,
+        scan_age=None,
+        battery_guard_mode=None,
+    ):
+        """Return a command decision for the latest planner command and sensor ages."""
+        numeric_tof = _finite_number(tof_range)
+        guard_mode = str(battery_guard_mode or "idle")
+
+        if guard_mode in self.battery_guard_block_modes:
+            return self._decision(
+                self.zero_twist(command),
+                "battery_guard_{}".format(guard_mode),
+                True,
+                "Battery guard is controlling return-to-dock",
+                numeric_tof,
+                tof_age,
+                scan_age,
+            )
+
+        if self.scan_watchdog_enabled:
+            if not scan_seen:
+                return self._decision(
+                    self.zero_twist(command),
+                    "scan_unavailable",
+                    True,
+                    "LiDAR scan has not been observed",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+            if scan_age is not None and scan_age > self.scan_stale_timeout:
+                return self._decision(
+                    self.zero_twist(command),
+                    "scan_stale",
+                    True,
+                    "LiDAR scan is stale",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+
+        if self.tof_stop_enabled:
+            if not tof_seen:
+                if self.require_tof:
+                    return self._decision(
+                        self.zero_twist(command),
+                        "tof_unavailable",
+                        True,
+                        "Required ToF range has not been observed",
+                        numeric_tof,
+                        tof_age,
+                        scan_age,
+                    )
+                return self._decision(
+                    self.copy_twist(command),
+                    "tof_unavailable",
+                    False,
+                    "Optional ToF range has not been observed",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+            if tof_age is not None and tof_age > self.tof_stale_timeout:
+                return self._decision(
+                    self.zero_twist(command),
+                    "tof_stale",
+                    True,
+                    "Previously observed ToF range is stale",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+            if numeric_tof is not None and numeric_tof <= self.emergency_stop_distance:
+                return self._decision(
+                    self.zero_twist(command),
+                    "tof_stop",
+                    True,
+                    "ToF range is inside emergency stop distance",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+            if numeric_tof is not None and numeric_tof <= self.max_obstacle_distance:
+                result = self.copy_twist(command)
+                if result.linear.x > self.caution_speed:
+                    result.linear.x = self.caution_speed
+                return self._decision(
+                    result,
+                    "tof_caution",
+                    False,
+                    "ToF range is inside caution distance",
+                    numeric_tof,
+                    tof_age,
+                    scan_age,
+                )
+
+        return self._decision(
+            self.copy_twist(command),
+            "clear",
+            False,
+            "Safety checks are clear",
+            numeric_tof,
+            tof_age,
+            scan_age,
+        )
+
+
+class ScoutSafetyFilterNode(object):
+    """ROS node that publishes only commands allowed by Scout-local safety checks."""
+
+    def __init__(self, config_path=None, site_path=None):
+        try:
+            import rospy
+            from geometry_msgs.msg import Twist
+            from sensor_msgs.msg import LaserScan
+            from sensor_msgs.msg import Range
+            from std_msgs.msg import String
+        except ImportError as exc:
+            raise SystemExit("Scout safety filter requires ROS Python packages: {}".format(exc))
+
+        self.rospy = rospy
+        self.Twist = Twist
+        self.String = String
+        rospy.init_node("scout_safety_filter", anonymous=False)
+        config_path = rospy.get_param("~config_file", config_path)
+        site_path = rospy.get_param("~site_file", site_path)
+        self.config, self.config_path = load_scout_config(config_path)
+        self.site_config, self.site_path = load_site_config(site_path)
+
+        safety = self.config.get("safety", {})
+        self.logic = ScoutSafetyLogic(
+            twist_type=Twist,
+            tof_stop_enabled=_as_bool(rospy.get_param("~tof_stop_enabled", safety.get("tof_stop_enabled", True))),
+            require_tof=_as_bool(rospy.get_param("~require_tof", safety.get("require_tof", False))),
+            max_obstacle_distance=rospy.get_param("~max_obstacle_distance", safety.get("max_obstacle_distance", 0.3)),
+            emergency_stop_distance=rospy.get_param(
+                "~emergency_stop_distance",
+                safety.get("emergency_stop_distance", 0.15),
+            ),
+            tof_stale_timeout=rospy.get_param("~tof_stale_timeout", safety.get("tof_stale_timeout", 1.0)),
+            scan_watchdog_enabled=_as_bool(
+                rospy.get_param("~scan_watchdog_enabled", safety.get("scan_watchdog_enabled", True))
+            ),
+            scan_stale_timeout=rospy.get_param("~scan_stale_timeout", safety.get("scan_stale_timeout", 1.0)),
+            caution_speed=rospy.get_param("~caution_speed", safety.get("caution_speed", 0.05)),
+        )
+
+        self.input_topic = rospy.get_param(
+            "~input_topic",
+            scout_runtime_topic(self.site_config, self.config, "planner_cmd_vel", "/scout/cmd_vel_planner"),
+        )
+        self.output_topic = rospy.get_param(
+            "~output_topic",
+            scout_runtime_topic(self.site_config, self.config, "autonomy_cmd_vel", "/scout/cmd_vel_companion"),
+        )
+        self.tof_topic = rospy.get_param(
+            "~tof_topic",
+            scout_runtime_topic(self.site_config, self.config, "tof_range", "/scout/tof"),
+        )
+        self.scan_topic = rospy.get_param(
+            "~scan_topic",
+            scout_runtime_topic(self.site_config, self.config, "lidar_scan", "/scan"),
+        )
+        self.state_topic = rospy.get_param(
+            "~state_topic",
+            scout_runtime_topic(self.site_config, self.config, "safety_state", "/scout/safety_state"),
+        )
+        self.battery_guard_state_topic = rospy.get_param(
+            "~battery_guard_state_topic",
+            scout_runtime_topic(self.site_config, self.config, "battery_guard_state", "/scout/battery_guard_state"),
+        )
+        self.publish_hz = float(rospy.get_param("~publish_hz", safety.get("publish_hz", 10.0)))
+        self.state_publish_period = float(rospy.get_param("~state_publish_period", 1.0))
+
+        self.latest_command = None
+        self.tof_seen = False
+        self.last_tof_range = None
+        self.last_tof_time = None
+        self.scan_seen = False
+        self.last_scan_time = None
+        self.battery_guard_mode = "idle"
+        self.last_state_json = None
+        self.last_state_publish = None
+
+        self.command_pub = rospy.Publisher(self.output_topic, Twist, queue_size=1)
+        self.state_pub = rospy.Publisher(self.state_topic, String, queue_size=1)
+        self.command_sub = rospy.Subscriber(self.input_topic, Twist, self.command_callback, queue_size=1)
+        self.tof_sub = rospy.Subscriber(self.tof_topic, Range, self.tof_callback, queue_size=1)
+        self.scan_sub = rospy.Subscriber(self.scan_topic, LaserScan, self.scan_callback, queue_size=1)
+        self.battery_guard_sub = rospy.Subscriber(
+            self.battery_guard_state_topic,
+            String,
+            self.battery_guard_callback,
+            queue_size=1,
+        )
+
+    def _now(self):
+        return self.rospy.Time.now()
+
+    def _age(self, stamp, now):
+        if stamp is None:
+            return None
+        return max(0.0, (now - stamp).to_sec())
+
+    def command_callback(self, msg):
+        self.latest_command = msg
+        self._publish_decision(force_command=True)
+
+    def tof_callback(self, msg):
+        self.tof_seen = True
+        self.last_tof_range = msg.range
+        self.last_tof_time = self._now()
+
+    def scan_callback(self, msg):
+        self.scan_seen = True
+        self.last_scan_time = self._now()
+
+    def battery_guard_callback(self, msg):
+        try:
+            payload = json.loads(getattr(msg, "data", "") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        if isinstance(payload, dict):
+            self.battery_guard_mode = str(payload.get("mode") or "idle")
+
+    def _state_payload(self, decision):
+        return {
+            "state": decision["state"],
+            "blocked": decision["blocked"],
+            "reason": decision["reason"],
+            "battery_guard_mode": self.battery_guard_mode,
+            "tof_range": decision["tof_range"],
+            "tof_age": decision["tof_age"],
+            "scan_age": decision["scan_age"],
+            "input_topic": self.input_topic,
+            "output_topic": self.output_topic,
+            "tof_topic": self.tof_topic,
+            "scan_topic": self.scan_topic,
+        }
+
+    def _publish_state(self, decision, now, force=False):
+        payload_json = json.dumps(self._state_payload(decision), sort_keys=True)
+        should_publish = force or payload_json != self.last_state_json
+        if not should_publish and self.last_state_publish is not None:
+            should_publish = (now - self.last_state_publish).to_sec() >= self.state_publish_period
+        if not should_publish:
+            return
+        self.state_pub.publish(payload_json)
+        self.last_state_json = payload_json
+        self.last_state_publish = now
+
+    def _publish_decision(self, force_command=False):
+        now = self._now()
+        command = self.latest_command or self.Twist()
+        decision = self.logic.decide(
+            command,
+            tof_seen=self.tof_seen,
+            tof_range=self.last_tof_range,
+            tof_age=self._age(self.last_tof_time, now),
+            scan_seen=self.scan_seen,
+            scan_age=self._age(self.last_scan_time, now),
+            battery_guard_mode=self.battery_guard_mode,
+        )
+        if force_command or decision["blocked"]:
+            self.command_pub.publish(decision["command"])
+        self._publish_state(decision, now, force=force_command)
+
+    def run(self):
+        self.rospy.loginfo(
+            "Scout safety filter active: %s -> %s (tof=%s, scan=%s)",
+            self.input_topic,
+            self.output_topic,
+            self.tof_topic,
+            self.scan_topic,
+        )
+        rate = self.rospy.Rate(self.publish_hz)
+        while not self.rospy.is_shutdown():
+            self._publish_decision(force_command=False)
+            rate.sleep()
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--site", default=None)
+    return parser
+
+
+def main(argv=None):
+    args, _ = build_parser().parse_known_args(argv)
+    node = ScoutSafetyFilterNode(config_path=args.config, site_path=args.site)
+    node.run()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
