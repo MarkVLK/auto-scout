@@ -126,6 +126,3 @@ recordings/
 # Auto-Scout CLI artifacts
 artifacts/
 validation-report.json
-
-# TODO checklist
-docs/AUTO_SCOUT_CHECKLIST.md

@@ -92,6 +92,16 @@ Reference this when resuming work. Items are ordered by dependency.
   Do not call `/nav_low_bat` during passive validation.
   Do not subscribe to `/CoreNode/backing_up`.
 
+- [ ] Revisit `rockchip.service` investigation and decide whether to fix or disable it
+  - Current findings are recorded in [ROCKCHIP_SERVICE_FINDINGS.md](ROCKCHIP_SERVICE_FINDINGS.md)
+  - Do not restart or edit the service without a deliberate decision; it is a vendor/base-image platform setup service, not an Auto-Scout service
+  - 2026-04-27 status: service is enabled but failed because the first-boot marker is missing and the expected `/packages/libmali` payload appears incomplete
+
+- [ ] Investigate ROS log management to prevent root partition fill-up
+  - Check if ROS logs (e.g., `/home/linaro/.ros/log/`) could fill the root partition over time
+  - Consider using `rosclean` or other log rotation mechanisms
+  - Determine if it's worthwhile to implement automated log cleanup
+
 ---
 
 ## Phase 2: Repo Fixes
