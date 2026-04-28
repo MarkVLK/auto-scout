@@ -132,6 +132,14 @@ Reference this when resuming work. Items are ordered by dependency.
   - 2026-04-27 post-reboot validation: Scout runtime and cleanup timer are active; dry-run cleanup exits 0 with `/userdata/auto-scout/ros-logs` at about 264K and legacy `/home/linaro/.ros/log` at 2.8M
   - 2026-04-27 post-reboot validation: companion runtime and cleanup timer are active; container reports `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
   - 2026-04-28 hardening: cleanup service now runs with lower CPU priority, batch CPU scheduling, and idle I/O scheduling to reduce contention with SSH and runtime processes on SD-card-backed systems
+  - 2026-04-28 Pi validation after Ethernet: live cleanup unit includes `Nice=10`, `CPUSchedulingPolicy=batch`, and `IOSchedulingClass=idle`; last cleanup run exited 0 with 60ms CPU and `/srv/auto-scout/ros-logs` currently at about 72K
+
+- [x] Follow up Raspberry Pi SSH and network instability after Ethernet
+  - 2026-04-28 validation: `auto-scout-pi5.local` resolves to Ethernet address `192.168.0.87`; 10 ICMP probes returned 0% packet loss with 2.5ms minimum, 13.2ms average, and one 60.9ms spike
+  - 2026-04-28 validation: 10 sequential default SSH connections to `automark@auto-scout-pi5.local` all succeeded in 0-1s
+  - 2026-04-28 validation: effective sshd settings are `UseDNS no`, `GSSAPIAuthentication no`, `GSSAPIKeyExchange no`, `PasswordAuthentication no`, and `MaxStartups 10:30:100`; entropy was 256
+  - 2026-04-28 finding: Pi is currently dual-homed with `eth0` at `192.168.0.87` metric 100 and `wlan0` at `192.168.0.88` metric 600; keep Ethernet preferred or disable Wi-Fi if hostname/IP instability returns
+  - 2026-04-28 validation: `systemctl --failed` on the Pi listed zero failed units
 
 ---
 
