@@ -127,6 +127,13 @@ The low-battery behavior is intentionally Scout-authoritative:
 - It monitors `/CoreNode/going_home_status` for vendor docking success, failure, cancel, or timeout.
 - It calls `/nav_low_bat` only when the guard decides vendor docking should start.
 
+The Scout should normally sit on the dock when idle. A `charging` guard state does
+not block mission departure by itself; missions may drive off the dock once
+battery is at or above `safety.mission_start_min_battery_level` (default 50%).
+Below that start threshold, the companion refuses the mission before sending
+navigation goals and notifies the operator with the current battery percentage
+when a webhook URL is configured.
+
 The companion can improve the return path, but it is not required for safety:
 
 - `battery_map_return_controller.py` runs through `companion_runtime.launch`.

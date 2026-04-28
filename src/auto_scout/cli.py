@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 from auto_scout.artifacts import ArtifactRun
 from auto_scout.command_runner import CommandRunner
@@ -27,6 +28,7 @@ def _validator_command(
     observe_motion=None,
     exercise_cmd_vel=False,
     skip_connectivity_check=False,
+    quiet=False,
 ):
     mode = "all" if role == "system" else "runtime"
     command = [
@@ -50,6 +52,8 @@ def _validator_command(
         command.append("--exercise-cmd-vel")
     if skip_connectivity_check:
         command.append("--skip-connectivity-check")
+    if quiet:
+        command.append("--quiet")
     return command
 
 
@@ -62,6 +66,7 @@ def _run_validator(
     observe_motion=None,
     exercise_cmd_vel=False,
     skip_connectivity_check=False,
+    quiet=False,
 ):
     command = _validator_command(
         role,
@@ -71,13 +76,13 @@ def _run_validator(
         observe_motion=observe_motion,
         exercise_cmd_vel=exercise_cmd_vel,
         skip_connectivity_check=skip_connectivity_check,
+        quiet=quiet,
     )
     artifact_run.log("$ {}".format(" ".join(command)))
-    completed = subprocess.run(
+    completed = _run_command_streaming_stderr(
         command,
         cwd=str(repo_root()),
-        capture_output=True,
-        text=True,
+        stream_stderr=not quiet,
     )
     artifact_run.write_text("validator.stdout.txt", completed.stdout)
     artifact_run.write_text("validator.stderr.txt", completed.stderr)
@@ -86,6 +91,52 @@ def _run_validator(
     report = json.loads(completed.stdout)
     artifact_run.write_json("validation-report.json", report)
     return report
+
+
+def _run_command_streaming_stderr(command, cwd=None, stream_stderr=True):
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stderr_parts = []
+
+    def drain_stderr():
+        for line in process.stderr:
+            stderr_parts.append(line)
+            if stream_stderr:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+
+    stderr_thread = threading.Thread(target=drain_stderr)
+    stderr_thread.daemon = True
+    stderr_thread.start()
+    stdout = process.stdout.read()
+    returncode = process.wait()
+    stderr_thread.join()
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        stdout or "",
+        "".join(stderr_parts),
+    )
+
+
+def _stderr_progress(quiet=False):
+    if quiet:
+        return None
+
+    def emit(message):
+        print(message, file=sys.stderr, flush=True)
+
+    return emit
+
+
+def _emit_progress(progress, message):
+    if progress:
+        progress(message)
 
 
 def _add_role_config_arguments(parser):
@@ -262,6 +313,7 @@ def build_parser():
     validate_parser.add_argument("role", choices=["scout", "companion", "system"])
     validate_parser.add_argument("--no-live-probe", action="store_true", help="Disable live Scout probing")
     validate_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
+    validate_parser.add_argument("--quiet", action="store_true", help="Suppress live progress output on stderr")
     validate_parser.add_argument(
         "--observe-motion",
         type=float,
@@ -277,6 +329,7 @@ def build_parser():
     probe_parser = subparsers.add_parser("probe", help="Probe the live Scout ROS surface")
     probe_parser.add_argument("role", choices=["scout"])
     probe_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
+    probe_parser.add_argument("--quiet", action="store_true", help="Suppress live progress output on stderr")
     probe_parser.add_argument(
         "--observe-motion",
         type=float,
@@ -399,18 +452,29 @@ def main(argv=None):
             observe_motion=args.observe_motion,
             exercise_cmd_vel=args.exercise_cmd_vel,
             skip_connectivity_check=args.skip_connectivity_check,
+            quiet=args.quiet,
         )
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report.get("summary", {}).get("ok", False) else 1
 
     if args.command == "probe":
+        progress = _stderr_progress(args.quiet)
         try:
             effective_site_config, prompted = _prompt_missing_network_roles(site_config, args, ["scout"])
+            _emit_progress(progress, "probe: Checking scout connectivity")
             _validate_connectivity(
                 effective_site_config,
                 ["scout"],
                 artifact_run,
                 skip=args.skip_connectivity_check,
+            )
+            _emit_progress(
+                progress,
+                (
+                    "probe: Scout connectivity check skipped"
+                    if args.skip_connectivity_check
+                    else "probe: Scout connectivity check complete"
+                ),
             )
             if prompted:
                 _write_site_if_requested(effective_site_config, site_path, True)
@@ -419,8 +483,10 @@ def main(argv=None):
                 observe_motion_seconds=args.observe_motion,
                 exercise_cmd_vel=args.exercise_cmd_vel,
                 artifact_run=artifact_run,
+                progress=progress,
             )
         except (RuntimeError, ValueError) as exc:
+            _emit_progress(progress, "probe: Connectivity or probe setup failed")
             payload = {
                 "ok": False,
                 "phase": "connectivity",

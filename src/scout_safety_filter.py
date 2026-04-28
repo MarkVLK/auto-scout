@@ -44,6 +44,7 @@ class ScoutSafetyLogic(object):
         scan_watchdog_enabled=True,
         scan_stale_timeout=1.0,
         caution_speed=0.05,
+        mission_start_min_battery_level=50.0,
     ):
         self.twist_type = twist_type
         self.tof_stop_enabled = bool(tof_stop_enabled)
@@ -54,7 +55,8 @@ class ScoutSafetyLogic(object):
         self.scan_watchdog_enabled = bool(scan_watchdog_enabled)
         self.scan_stale_timeout = float(scan_stale_timeout)
         self.caution_speed = float(caution_speed)
-        self.battery_guard_block_modes = set(["return_required", "vendor_docking", "failed", "charging"])
+        self.mission_start_min_battery_level = float(mission_start_min_battery_level)
+        self.battery_guard_block_modes = set(["return_required", "vendor_docking", "failed"])
 
     def _new_twist(self, template):
         twist_type = self.twist_type or template.__class__
@@ -80,7 +82,18 @@ class ScoutSafetyLogic(object):
         result.angular.z = 0.0
         return result
 
-    def _decision(self, command, state, blocked, reason, tof_range, tof_age, scan_age):
+    def _decision(
+        self,
+        command,
+        state,
+        blocked,
+        reason,
+        tof_range,
+        tof_age,
+        scan_age,
+        battery_percent=None,
+        charging=False,
+    ):
         return {
             "command": command,
             "state": state,
@@ -89,6 +102,9 @@ class ScoutSafetyLogic(object):
             "tof_range": tof_range,
             "tof_age": tof_age,
             "scan_age": scan_age,
+            "battery_percent": battery_percent,
+            "charging": bool(charging),
+            "mission_start_min_battery_level": self.mission_start_min_battery_level,
         }
 
     def decide(
@@ -100,10 +116,14 @@ class ScoutSafetyLogic(object):
         scan_seen=False,
         scan_age=None,
         battery_guard_mode=None,
+        battery_percent=None,
+        charging=False,
     ):
         """Return a command decision for the latest planner command and sensor ages."""
         numeric_tof = _finite_number(tof_range)
+        numeric_battery = _finite_number(battery_percent)
         guard_mode = str(battery_guard_mode or "idle")
+        is_charging = _as_bool(charging, default=(guard_mode == "charging"))
 
         if guard_mode in self.battery_guard_block_modes:
             return self._decision(
@@ -114,6 +134,21 @@ class ScoutSafetyLogic(object):
                 numeric_tof,
                 tof_age,
                 scan_age,
+                battery_percent=numeric_battery,
+                charging=is_charging,
+            )
+
+        if is_charging and numeric_battery is not None and numeric_battery < self.mission_start_min_battery_level:
+            return self._decision(
+                self.zero_twist(command),
+                "dock_charge_required",
+                True,
+                "Scout is charging below the mission start battery threshold",
+                numeric_tof,
+                tof_age,
+                scan_age,
+                battery_percent=numeric_battery,
+                charging=is_charging,
             )
 
         if self.scan_watchdog_enabled:
@@ -126,6 +161,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
             if scan_age is not None and scan_age > self.scan_stale_timeout:
                 return self._decision(
@@ -136,6 +173,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
 
         if self.tof_stop_enabled:
@@ -149,6 +188,8 @@ class ScoutSafetyLogic(object):
                         numeric_tof,
                         tof_age,
                         scan_age,
+                        battery_percent=numeric_battery,
+                        charging=is_charging,
                     )
                 return self._decision(
                     self.copy_twist(command),
@@ -158,6 +199,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
             if tof_age is not None and tof_age > self.tof_stale_timeout:
                 return self._decision(
@@ -168,6 +211,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
             if numeric_tof is not None and numeric_tof <= self.emergency_stop_distance:
                 return self._decision(
@@ -178,6 +223,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
             if numeric_tof is not None and numeric_tof <= self.max_obstacle_distance:
                 result = self.copy_twist(command)
@@ -191,6 +238,8 @@ class ScoutSafetyLogic(object):
                     numeric_tof,
                     tof_age,
                     scan_age,
+                    battery_percent=numeric_battery,
+                    charging=is_charging,
                 )
 
         return self._decision(
@@ -201,6 +250,8 @@ class ScoutSafetyLogic(object):
             numeric_tof,
             tof_age,
             scan_age,
+            battery_percent=numeric_battery,
+            charging=is_charging,
         )
 
 
@@ -300,6 +351,10 @@ class ScoutSafetyFilterNode(object):
             ),
             scan_stale_timeout=rospy.get_param("~scan_stale_timeout", safety.get("scan_stale_timeout", 1.0)),
             caution_speed=rospy.get_param("~caution_speed", safety.get("caution_speed", 0.05)),
+            mission_start_min_battery_level=rospy.get_param(
+                "~mission_start_min_battery_level",
+                safety.get("mission_start_min_battery_level", 50.0),
+            ),
         )
 
         self.input_topic = rospy.get_param(
@@ -339,6 +394,8 @@ class ScoutSafetyFilterNode(object):
         self.scan_seen = False
         self.last_scan_time = None
         self.battery_guard_mode = "idle"
+        self.battery_percent = None
+        self.charging = False
         self.last_state_json = None
         self.last_state_publish = None
 
@@ -384,6 +441,8 @@ class ScoutSafetyFilterNode(object):
             payload = {}
         if isinstance(payload, dict):
             self.battery_guard_mode = str(payload.get("mode") or "idle")
+            self.battery_percent = _finite_number(payload.get("battery_percent"))
+            self.charging = _as_bool(payload.get("charging"), default=(self.battery_guard_mode == "charging"))
 
     def _state_payload(self, decision, publish_status):
         return {
@@ -391,6 +450,9 @@ class ScoutSafetyFilterNode(object):
             "blocked": decision["blocked"],
             "reason": decision["reason"],
             "battery_guard_mode": self.battery_guard_mode,
+            "battery_percent": decision["battery_percent"],
+            "charging": decision["charging"],
+            "mission_start_min_battery_level": decision["mission_start_min_battery_level"],
             "command_active": publish_status["command_active"],
             "command_age": publish_status["command_age"],
             "command_suppressed": publish_status["command_suppressed"],
@@ -426,6 +488,8 @@ class ScoutSafetyFilterNode(object):
             scan_seen=self.scan_seen,
             scan_age=self._age(self.last_scan_time, now),
             battery_guard_mode=self.battery_guard_mode,
+            battery_percent=self.battery_percent,
+            charging=self.charging,
         )
         publish_status = self.command_policy.decide_publish(decision, now.to_sec(), command_event=command_event)
         if publish_status["publish"]:

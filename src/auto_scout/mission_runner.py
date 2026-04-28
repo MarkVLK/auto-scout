@@ -1,5 +1,6 @@
 """Helpers for invoking named missions through the companion runtime."""
 
+import json
 import os
 import shlex
 
@@ -10,6 +11,25 @@ from auto_scout.site_config import remote_site_config_path
 
 
 CONTAINER_WORKSPACE = "/opt/catkin_ws/src/auto-scout"
+
+
+def _parse_remote_mission_payload(text):
+    """Return the final JSON object emitted by the remote mission process."""
+    decoder = json.JSONDecoder()
+    payload = None
+    value = text or ""
+    for index, char in enumerate(value):
+        if char != "{":
+            continue
+        try:
+            candidate, end = decoder.raw_decode(value[index:])
+        except ValueError:
+            continue
+        if isinstance(candidate, dict):
+            if not value[index + end:].strip():
+                return candidate
+            payload = candidate
+    return payload
 
 
 def evaluate_smoke_loop_gate(site_config, mission_config):
@@ -93,7 +113,23 @@ def run_smoke_loop(site_config, site_path, mission_config, mission_path, artifac
     companion = role_config(site_config, "companion")
     runner = CommandRunner(artifact_run=artifact_run, dry_run=dry_run)
     remote_command = _build_smoke_loop_remote_command(companion, mission_path, artifact_run)
-    runner.run_remote(companion["ssh"], remote_command)
+    remote_result = runner.run_remote(companion["ssh"], remote_command, check=False)
+    artifact_run.write_text("remote.stdout.txt", remote_result.stdout)
+    artifact_run.write_text("remote.stderr.txt", remote_result.stderr)
+
+    remote_payload = _parse_remote_mission_payload(remote_result.stdout)
+    if remote_payload:
+        remote_payload.setdefault("phase", "remote_execution" if remote_payload.get("ok", False) else "preflight")
+        remote_payload["dry_run"] = dry_run
+        remote_payload["site_path"] = site_path
+        remote_payload["mission_path"] = mission_path
+        remote_payload["host"] = companion["ssh"]["host"]
+        artifact_run.write_json("remote-mission-result.json", remote_payload)
+        return remote_payload
+
+    if not remote_result.ok:
+        stderr = remote_result.stderr.strip() or remote_result.stdout.strip() or "remote mission failed"
+        raise RuntimeError(stderr)
 
     return {
         "ok": True,

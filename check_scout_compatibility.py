@@ -474,6 +474,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         "battery_guard_enabled",
         "min_battery_level",
         "critical_battery_level",
+        "mission_start_min_battery_level",
         "map_return_claim_timeout_seconds",
         "dock_timeout_seconds",
         "dock_retry_count",
@@ -1273,7 +1274,20 @@ def _probe_mismatch_items(probe_result, prefixes):
     return [item for item in suggestions if any(item.get("path", "").startswith(prefix) for prefix in prefixes)]
 
 
-def _add_live_probe_check(report, site_config, effective_role, runtime_profile, observe_motion, exercise_cmd_vel, live_probe_enabled):
+def _stderr_progress(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def _add_live_probe_check(
+    report,
+    site_config,
+    effective_role,
+    runtime_profile,
+    observe_motion,
+    exercise_cmd_vel,
+    live_probe_enabled,
+    progress=None,
+):
     if effective_role not in ["scout", "system"]:
         report.add(
             "runtime.live_probe",
@@ -1296,6 +1310,7 @@ def _add_live_probe_check(report, site_config, effective_role, runtime_profile, 
         observe_motion_seconds=observe_motion,
         exercise_cmd_vel=exercise_cmd_vel,
         force_remote=force_remote,
+        progress=progress,
     )
     if not probe_result.get("ok", False):
         report.add(
@@ -1812,6 +1827,7 @@ def add_runtime_checks(
     observe_motion=0.0,
     exercise_cmd_vel=False,
     connectivity_check_enabled=True,
+    progress=None,
 ):
     """Validate local/runtime readiness for the selected role."""
     _add_identity_check(report, effective_role, runtime_profile)
@@ -1836,6 +1852,7 @@ def add_runtime_checks(
         observe_motion,
         exercise_cmd_vel,
         live_probe_enabled,
+        progress=progress,
     )
     _add_pose_gate_check(report, site_config)
     _add_mission_checks(report, site_config)
@@ -1851,6 +1868,7 @@ def build_parser():
     parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
     parser.add_argument("--observe-motion", type=float, default=0.0, help="Observe odometry while manually driving the Scout")
     parser.add_argument("--exercise-cmd-vel", action="store_true", help="Publish a short command on the vendor motion topic during probing")
+    parser.add_argument("--quiet", action="store_true", help="Suppress live progress output on stderr")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     parser.add_argument("--json-out", default=None, help="Write JSON report to a file")
     return parser
@@ -1862,6 +1880,7 @@ def main(argv=None):
     effective_role = resolve_role(args.role, runtime_profile)
     site_config, site_path = load_site_config(args.site)
     project_config, config_path = load_scout_config(args.config)
+    progress = None if args.quiet else _stderr_progress
 
     report = ReportBuilder(args.mode, runtime_profile, effective_role)
 
@@ -1879,6 +1898,7 @@ def main(argv=None):
             observe_motion=args.observe_motion,
             exercise_cmd_vel=args.exercise_cmd_vel,
             connectivity_check_enabled=not args.skip_connectivity_check,
+            progress=progress,
         )
 
     payload = report.build()

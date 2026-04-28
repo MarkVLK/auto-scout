@@ -5,11 +5,61 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
+try:
+    import requests
+except ImportError:
+    class _MissingRequests:
+        def post(self, *args, **kwargs):
+            raise ImportError("requests package is required")
+
+    requests = _MissingRequests()
+    REQUESTS_AVAILABLE = False
+else:
+    REQUESTS_AVAILABLE = True
 
 from auto_scout.mission_config import load_mission_config
 from auto_scout.site_config import load_site_config, scout_runtime_topic, system_capabilities
 from config_utils import load_scout_config
+
+
+DEFAULT_MISSION_START_MIN_BATTERY_LEVEL = 50.0
+BATTERY_TOO_LOW_REASON = "battery_too_low_to_leave_dock"
+
+
+def _finite_number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ["1", "true", "yes", "on"]
+
+
+def evaluate_dock_departure_gate(battery_guard_state, mission_start_min_battery_level):
+    payload = battery_guard_state if isinstance(battery_guard_state, dict) else {}
+    mode = str(payload.get("mode") or "idle")
+    charging = _as_bool(payload.get("charging"), default=(mode == "charging"))
+    battery_percent = _finite_number(payload.get("battery_percent"))
+    threshold = float(mission_start_min_battery_level)
+    result = {
+        "ok": True,
+        "reason": "dock_departure_allowed",
+        "battery_percent": battery_percent,
+        "charging": charging,
+        "battery_guard_mode": mode,
+        "mission_start_min_battery_level": threshold,
+        "battery_guard_state": payload,
+    }
+    if charging and battery_percent is not None and battery_percent < threshold:
+        result["ok"] = False
+        result["reason"] = BATTERY_TOO_LOW_REASON
+    return result
 
 
 class MissionRunError(RuntimeError):
@@ -50,6 +100,7 @@ class CompanionMissionController:
         self.latest_image = None
         self.latest_pose = None
         self.pose_seen = False
+        self.latest_battery_guard_state = None
 
         rospy.init_node("scout_navigation_controller", anonymous=False)
         self.status_pub = rospy.Publisher("/scout/mission_status", String, queue_size=1)
@@ -62,6 +113,12 @@ class CompanionMissionController:
         )
         rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped, self.pose_callback, queue_size=1)
         rospy.Subscriber("/odom", Odometry, self.odom_callback, queue_size=1)
+        rospy.Subscriber(
+            scout_runtime_topic(self.site_config, self.config, "battery_guard_state", "/scout/battery_guard_state"),
+            String,
+            self.battery_guard_callback,
+            queue_size=1,
+        )
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
 
     def log(self, message):
@@ -79,8 +136,19 @@ class CompanionMissionController:
             handle.write("\n")
         return target
 
+    def publish_status_payload(self, payload):
+        self.status_pub.publish(json.dumps(payload, sort_keys=True))
+
     def camera_callback(self, msg):
         self.latest_image = msg
+
+    def battery_guard_callback(self, msg):
+        try:
+            payload = json.loads(getattr(msg, "data", "") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        if isinstance(payload, dict):
+            self.latest_battery_guard_state = payload
 
     def pose_callback(self, msg):
         self.latest_pose = {
@@ -113,6 +181,23 @@ class CompanionMissionController:
         self.log("Waiting for move_base")
         if not self.move_base_client.wait_for_server(self.rospy.Duration(timeout_seconds)):
             raise MissionRunError("move_base action server did not become available")
+
+    def wait_for_battery_guard_state(self, timeout_seconds=3.0):
+        start = self.rospy.Time.now()
+        while not self.rospy.is_shutdown():
+            if self.latest_battery_guard_state is not None:
+                return self.latest_battery_guard_state
+            if (self.rospy.Time.now() - start).to_sec() >= timeout_seconds:
+                return None
+            self.rospy.sleep(0.25)
+
+    def mission_start_min_battery_level(self):
+        safety = self.config.get("safety", {}) if isinstance(self.config.get("safety", {}), dict) else {}
+        return float(safety.get("mission_start_min_battery_level", DEFAULT_MISSION_START_MIN_BATTERY_LEVEL))
+
+    def evaluate_mission_start_preflight(self):
+        state = self.wait_for_battery_guard_state()
+        return evaluate_dock_departure_gate(state, self.mission_start_min_battery_level())
 
     def navigate_to_waypoint(self, waypoint_name):
         waypoints = self.config.get("waypoints", {})
@@ -182,6 +267,8 @@ class CompanionMissionController:
         )
         if not webhook_url:
             raise MissionRunError("Notification is enabled but no webhook URL is configured")
+        if not REQUESTS_AVAILABLE:
+            raise MissionRunError("Notification requires the requests package")
 
         payload = {
             "mission": self.mission.get("name", "smoke_loop"),
@@ -196,8 +283,57 @@ class CompanionMissionController:
         self.log("Sent webhook notification to {}".format(webhook_url))
         return {"sent": True, "status_code": response.status_code}
 
+    def notification_webhook_url(self):
+        return (
+            self.site_config["roles"]["companion"].get("notifications", {}).get("webhook_url")
+            or self.config.get("storage", {}).get("webhook_url", "")
+        )
+
+    def send_preflight_notification(self, result):
+        webhook_url = self.notification_webhook_url()
+        if not webhook_url:
+            return {"sent": False, "reason": "webhook_url_empty"}
+        payload = dict(result)
+        payload["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=15)
+            response.raise_for_status()
+        except Exception as exc:
+            return {"sent": False, "reason": "webhook_error", "error": str(exc)}
+        self.log("Sent preflight notification to {}".format(webhook_url))
+        return {"sent": True, "status_code": response.status_code}
+
+    def refuse_mission_start(self, gate):
+        result = {
+            "ok": False,
+            "phase": "preflight",
+            "mission": self.mission.get("name", "smoke_loop"),
+            "reason": gate["reason"],
+            "battery_percent": gate["battery_percent"],
+            "charging": gate["charging"],
+            "battery_guard_mode": gate["battery_guard_mode"],
+            "mission_start_min_battery_level": gate["mission_start_min_battery_level"],
+            "battery_guard_state": gate["battery_guard_state"],
+            "artifact_dir": str(self.artifact_dir),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        self.log(
+            "Mission blocked: battery {:.1f}% is below mission start threshold {:.1f}%".format(
+                gate["battery_percent"],
+                gate["mission_start_min_battery_level"],
+            )
+        )
+        result["notification"] = self.send_preflight_notification(result)
+        self.write_json("mission-result.json", result)
+        self.publish_status_payload(result)
+        return result
+
     def run_smoke_loop(self):
         self.log("Starting smoke-loop mission")
+        mission_start_gate = self.evaluate_mission_start_preflight()
+        if not mission_start_gate["ok"]:
+            return self.refuse_mission_start(mission_start_gate)
+
         self.wait_for_pose()
         self.wait_for_move_base()
 

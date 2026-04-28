@@ -532,6 +532,7 @@ These review items are complete in the current repo. Keep this section as a refe
 - Use `/cmd_vel_force`, not `/cmd_vel`, for external motion control.
 - Normal autonomy should publish to `/scout/cmd_vel_planner`; `/cmd_vel_force` is reached only after safety filtering and `scout_motion_bridge.py`.
 - The safety filter is a planner-command gate, not a continuous owner of vendor motion. It must not publish periodic zero commands while iOS manual driving or vendor docking owns motion.
+- Charging on the dock is allowed for mission departure once battery is at or above `safety.mission_start_min_battery_level`; below that threshold the companion refuses the mission and reports the current battery percent.
 - Scout forward motion is on `linear.y`; `scout_motion_bridge.py` handles remapping after `/scout/cmd_vel_companion`.
 - Built-in ToF and IMU are supporting sensors. They add command safety and pose context, but they are not a replacement for `/scan` during mapping or patrol.
 - Low battery overrides normal Auto-Scout work. The Scout-local guard is authoritative and vendor `/nav_low_bat` is always the final physical docking step.

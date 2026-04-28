@@ -187,6 +187,38 @@ class LiveProbeTest(unittest.TestCase):
         self.assertEqual(suggestions["roles.scout.devices.lidar"], "/dev/ttyS4")
         self.assertEqual(suggestions["roles.scout.topics.odom"], "/MotorNode/vio_odom_relative")
 
+    def test_probe_progress_reports_ordered_work_and_skipped_motion_observation(self):
+        site_config = default_site_config()
+        runner = FakeRunner()
+        progress = []
+
+        result = probe_scout_capabilities(
+            site_config,
+            observe_motion_seconds=0,
+            exercise_cmd_vel=False,
+            runner=runner,
+            force_remote=True,
+            progress=progress.append,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(progress)
+        joined = "\n".join(progress)
+        self.assertIn("Starting live Scout probe", progress[0])
+        self.assertIn("Probe work plan", joined)
+        self.assertIn("remaining ROS timeout budget <=", joined)
+        self.assertIn("Topic lidar_scan /scan: reading publishers/subscribers", joined)
+        self.assertIn("Motion observation skipped (--observe-motion 0)", joined)
+        self.assertIn("Live Scout probe complete", joined)
+        self.assertLess(
+            joined.index("Probe work plan"),
+            joined.index("Topic lidar_scan /scan: reading publishers/subscribers"),
+        )
+        self.assertLess(
+            joined.index("Motion observation skipped (--observe-motion 0)"),
+            joined.index("Live Scout probe complete"),
+        )
+
     def test_apply_probe_suggestions_updates_site_inventory(self):
         site_config = default_site_config()
         site_config["roles"]["scout"]["capabilities"]["pose"] = False

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Regression tests for the clean-slate validation and CLI entrypoints."""
 
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +20,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import check_scout_compatibility as validator
+from auto_scout import cli
+from auto_scout import mission_runner
 from check_scout_compatibility import find_local_markdown_link_targets
 from auto_scout.deploy import _render_companion_service
 from auto_scout.deploy import _render_ros_log_cleanup_service
@@ -204,6 +209,95 @@ class ValidationCliTest(unittest.TestCase):
             site_config = load_yaml(site_path)
 
         self.assertEqual(site_config["roles"]["scout"]["motion"]["drive_model"], "omni")
+
+    def test_cli_probe_progress_goes_to_stderr_and_stdout_stays_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            site_config = default_site_config()
+            scout = site_config["roles"]["scout"]
+            scout["ssh"]["host"] = "192.0.2.10"
+            scout["ros"]["master_uri"] = "http://192.0.2.10:11311"
+            scout["ros"]["advertise_host"] = "192.0.2.10"
+            write_yaml(site_path, site_config)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            def fake_probe(site_config, observe_motion_seconds, exercise_cmd_vel, artifact_run, progress=None):
+                self.assertEqual(observe_motion_seconds, 0)
+                self.assertFalse(exercise_cmd_vel)
+                if progress:
+                    progress("probe: fake live probe progress")
+                return {
+                    "ok": True,
+                    "observed": {},
+                    "inferred_capabilities": {},
+                    "config_mismatch_suggestions": [],
+                    "errors": [],
+                }
+
+            with patch.object(cli, "probe_scout_capabilities", side_effect=fake_probe):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    return_code = cli.main(
+                        [
+                            "--site",
+                            str(site_path),
+                            "probe",
+                            "scout",
+                            "--skip-connectivity-check",
+                            "--observe-motion",
+                            "0",
+                        ]
+                    )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(return_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertIn("probe: Checking scout connectivity", stderr.getvalue())
+        self.assertIn("probe: fake live probe progress", stderr.getvalue())
+
+    def test_cli_probe_quiet_suppresses_progress(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            site_config = default_site_config()
+            scout = site_config["roles"]["scout"]
+            scout["ssh"]["host"] = "192.0.2.10"
+            scout["ros"]["master_uri"] = "http://192.0.2.10:11311"
+            scout["ros"]["advertise_host"] = "192.0.2.10"
+            write_yaml(site_path, site_config)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            observed_progress_callbacks = []
+
+            def fake_probe(site_config, observe_motion_seconds, exercise_cmd_vel, artifact_run, progress=None):
+                observed_progress_callbacks.append(progress)
+                return {
+                    "ok": True,
+                    "observed": {},
+                    "inferred_capabilities": {},
+                    "config_mismatch_suggestions": [],
+                    "errors": [],
+                }
+
+            with patch.object(cli, "probe_scout_capabilities", side_effect=fake_probe):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    return_code = cli.main(
+                        [
+                            "--site",
+                            str(site_path),
+                            "probe",
+                            "scout",
+                            "--skip-connectivity-check",
+                            "--observe-motion",
+                            "0",
+                            "--quiet",
+                        ]
+                    )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(return_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(observed_progress_callbacks, [None])
 
     def test_cli_configure_companion_prompt_accepts_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -540,6 +634,59 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("python2 src/scout_navigation_controller.py", command)
         self.assertNotIn("python3 src/scout_navigation_controller.py", command)
         self.assertIn("/opt/catkin_ws/src/auto-scout/config/site_local.yaml", command)
+
+    def test_smoke_loop_remote_preflight_payload_is_returned(self):
+        site_config = default_site_config()
+        site_config["roles"]["companion"]["capabilities"]["notify"] = True
+        site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+        mission_config, mission_path = load_mission_config("smoke_loop")
+
+        class FakeArtifactRun:
+            path = REPO_ROOT / "artifacts" / "runs" / "smoke-loop" / "run-001"
+
+            def __init__(self):
+                self.json = {}
+                self.text = {}
+
+            def write_json(self, name, payload):
+                self.json[name] = payload
+
+            def write_text(self, name, content):
+                self.text[name] = content
+
+        class FakeRemoteResult:
+            ok = True
+            stdout = (
+                'ros log line\n'
+                '{"ok": false, "phase": "preflight", "reason": "battery_too_low_to_leave_dock", '
+                '"battery_percent": 49.9, "battery_guard_state": {"mode": "charging"}}\n'
+            )
+            stderr = ""
+
+        class FakeRunner:
+            def __init__(self, artifact_run=None, dry_run=False):
+                self.artifact_run = artifact_run
+                self.dry_run = dry_run
+
+            def run_remote(self, ssh_config, remote_command, check=True):
+                return FakeRemoteResult()
+
+        artifact_run = FakeArtifactRun()
+        with patch.object(mission_runner, "CommandRunner", FakeRunner):
+            result = mission_runner.run_smoke_loop(
+                site_config,
+                str(REPO_ROOT / "config" / "site_local.yaml"),
+                mission_config,
+                mission_path,
+                artifact_run,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "preflight")
+        self.assertEqual(result["reason"], "battery_too_low_to_leave_dock")
+        self.assertAlmostEqual(result["battery_percent"], 49.9)
+        self.assertIn("remote.stdout.txt", artifact_run.text)
+        self.assertEqual(artifact_run.json["remote-mission-result.json"]["reason"], "battery_too_low_to_leave_dock")
 
     def test_cli_smoke_loop_dry_run_fails_fast_on_unverified_site(self):
         with tempfile.TemporaryDirectory() as temp_dir:

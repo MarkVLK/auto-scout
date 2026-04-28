@@ -100,6 +100,7 @@ safety:
   battery_guard_enabled: true
   min_battery_level: 20.0
   critical_battery_level: 10.0
+  mission_start_min_battery_level: 50.0
   battery_reset_margin: 5.0
   map_return_claim_timeout_seconds: 5.0
   map_return_timeout_seconds: 180.0

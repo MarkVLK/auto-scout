@@ -47,6 +47,7 @@ class ScoutSafetyLogicTest(unittest.TestCase):
             "scan_watchdog_enabled": True,
             "scan_stale_timeout": 1.0,
             "caution_speed": 0.05,
+            "mission_start_min_battery_level": 50.0,
         }
         defaults.update(overrides)
         return ScoutSafetyLogic(**defaults)
@@ -155,7 +156,7 @@ class ScoutSafetyLogicTest(unittest.TestCase):
         self.assertAlmostEqual(decision["command"].linear.x, 0.2)
 
     def test_battery_guard_return_modes_block_planner_command(self):
-        for mode in ["return_required", "vendor_docking", "failed", "charging"]:
+        for mode in ["return_required", "vendor_docking", "failed"]:
             decision = self.make_logic().decide(
                 twist(),
                 tof_seen=True,
@@ -170,6 +171,64 @@ class ScoutSafetyLogicTest(unittest.TestCase):
             self.assertTrue(decision["blocked"])
             self.assertAlmostEqual(decision["command"].linear.x, 0.0)
             self.assertAlmostEqual(decision["command"].angular.z, 0.0)
+
+    def test_charging_above_mission_start_threshold_allows_planner_command(self):
+        decision = self.make_logic().decide(
+            twist(),
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=0.1,
+            battery_guard_mode="charging",
+            battery_percent=100.0,
+            charging=True,
+        )
+
+        self.assertEqual(decision["state"], "clear")
+        self.assertFalse(decision["blocked"])
+        self.assertTrue(decision["charging"])
+        self.assertAlmostEqual(decision["battery_percent"], 100.0)
+        self.assertAlmostEqual(decision["mission_start_min_battery_level"], 50.0)
+        self.assertAlmostEqual(decision["command"].linear.x, 0.2)
+
+    def test_charging_below_mission_start_threshold_blocks_planner_command(self):
+        decision = self.make_logic().decide(
+            twist(),
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=0.1,
+            battery_guard_mode="charging",
+            battery_percent=49.0,
+            charging=True,
+        )
+
+        self.assertEqual(decision["state"], "dock_charge_required")
+        self.assertTrue(decision["blocked"])
+        self.assertTrue(decision["charging"])
+        self.assertAlmostEqual(decision["battery_percent"], 49.0)
+        self.assertAlmostEqual(decision["mission_start_min_battery_level"], 50.0)
+        self.assertAlmostEqual(decision["command"].linear.x, 0.0)
+
+    def test_charging_with_unknown_battery_does_not_block_by_itself(self):
+        decision = self.make_logic().decide(
+            twist(),
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=0.1,
+            battery_guard_mode="charging",
+            battery_percent=None,
+            charging=True,
+        )
+
+        self.assertEqual(decision["state"], "clear")
+        self.assertFalse(decision["blocked"])
+        self.assertTrue(decision["charging"])
+        self.assertIsNone(decision["battery_percent"])
 
 
 class ScoutCommandPublishPolicyTest(unittest.TestCase):
@@ -250,7 +309,7 @@ class ScoutCommandPublishPolicyTest(unittest.TestCase):
 
     def test_battery_guard_block_modes_do_not_repeat_stop_commands(self):
         logic = self.make_logic()
-        for mode in ["vendor_docking", "charging", "failed"]:
+        for mode in ["vendor_docking", "failed"]:
             policy = self.make_policy()
             command = twist()
 
@@ -266,6 +325,35 @@ class ScoutCommandPublishPolicyTest(unittest.TestCase):
             self.assertTrue(second["command_suppressed"])
             self.assertFalse(third["publish"])
             self.assertTrue(third["command_suppressed"])
+
+    def test_dock_charge_required_does_not_repeat_stop_commands(self):
+        logic = self.make_logic()
+        policy = self.make_policy()
+        command = twist()
+        decision = logic.decide(
+            command,
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=0.1,
+            battery_guard_mode="charging",
+            battery_percent=49.0,
+            charging=True,
+        )
+
+        policy.note_command(0.0)
+        first = policy.decide_publish(decision, now=0.0, command_event=True)
+        second = policy.decide_publish(decision, now=0.1)
+        policy.note_command(0.2)
+        third = policy.decide_publish(decision, now=0.2, command_event=True)
+
+        self.assertTrue(first["publish"])
+        self.assertTrue(first["publish_stop"])
+        self.assertFalse(second["publish"])
+        self.assertTrue(second["command_suppressed"])
+        self.assertFalse(third["publish"])
+        self.assertTrue(third["command_suppressed"])
 
     def test_map_return_continues_to_publish_safe_planner_commands(self):
         logic = self.make_logic()

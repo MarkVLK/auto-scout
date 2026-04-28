@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shlex
+import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -59,6 +60,7 @@ TOPIC_TYPES = {
 SENSOR_TOPIC_KEYS = ["scout_tof", "tof_range", "scout_imu", "imu_data"]
 COMMAND_TOPIC_KEYS = ["vendor_cmd_vel", "planner_cmd_vel", "autonomy_cmd_vel", "safety_state"]
 BATTERY_TOPIC_KEYS = ["battery_status", "battery_guard_state", "vendor_dock_status"]
+PROBE_TOPIC_KEYS = ["lidar_scan", "camera_compressed", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS
 
 SERVICE_CANDIDATES = {
     "vendor_low_battery_dock": ["/nav_low_bat"],
@@ -72,6 +74,77 @@ DEVICE_CANDIDATES = {
     "camera": ["/dev/video0"],
     "lidar": ["/dev/ttyS4", "/dev/ttyUSB0"],
 }
+
+TOPIC_INFO_TIMEOUT_SECONDS = 5
+TOPIC_HZ_TIMEOUT_SECONDS = 6
+TOPIC_SAMPLE_TIMEOUT_SECONDS = 5
+TOPIC_DETAIL_TIMEOUT_BUDGET_SECONDS = (
+    TOPIC_INFO_TIMEOUT_SECONDS
+    + TOPIC_HZ_TIMEOUT_SECONDS
+    + TOPIC_SAMPLE_TIMEOUT_SECONDS
+)
+TOPIC_LIST_TIMEOUT_SECONDS = 8
+NODE_LIST_TIMEOUT_SECONDS = 8
+SERVICE_LIST_TIMEOUT_SECONDS = 8
+SERVICE_TYPE_TIMEOUT_SECONDS = 5
+COMMAND_EXERCISE_TIMEOUT_BUDGET_SECONDS = 8
+
+
+def _format_seconds(seconds):
+    value = max(float(seconds or 0.0), 0.0)
+    if value < 60:
+        return "{:.0f}s".format(value)
+    minutes = int(value // 60)
+    remainder = int(value % 60)
+    return "{}m{:02d}s".format(minutes, remainder)
+
+
+class ProbeProgress:
+    """Format optional live probe progress without changing the JSON report."""
+
+    def __init__(self, callback=None):
+        self.callback = callback
+        self.started_at = time.monotonic()
+        self.completed_steps = 0
+        self.total_steps = None
+        self.remaining_timeout_budget = None
+
+    def _emit(self, message):
+        if not self.callback:
+            return
+
+        parts = ["elapsed {}".format(_format_seconds(time.monotonic() - self.started_at))]
+        if self.total_steps:
+            parts.append("{}/{} steps".format(self.completed_steps, self.total_steps))
+        elif self.completed_steps:
+            parts.append("{} steps done".format(self.completed_steps))
+        if self.remaining_timeout_budget is not None and self.remaining_timeout_budget > 0:
+            parts.append(
+                "remaining ROS timeout budget <= {}".format(
+                    _format_seconds(self.remaining_timeout_budget)
+                )
+            )
+        self.callback("probe: {} ({})".format(message, ", ".join(parts)))
+
+    def info(self, message):
+        self._emit(message)
+
+    def set_plan(self, total_steps, remaining_timeout_budget, message):
+        self.total_steps = int(total_steps)
+        self.remaining_timeout_budget = max(float(remaining_timeout_budget or 0.0), 0.0)
+        self._emit(message)
+
+    def begin(self, message):
+        self._emit(message)
+
+    def finish(self, message, timeout_budget=0.0):
+        self.completed_steps += 1
+        if self.remaining_timeout_budget is not None:
+            self.remaining_timeout_budget = max(
+                self.remaining_timeout_budget - float(timeout_budget or 0.0),
+                0.0,
+            )
+        self._emit(message)
 
 
 def _looks_like_local_scout():
@@ -301,17 +374,66 @@ def _check_device(executor, path, candidates=None):
     return payload
 
 
-def _topic_details(executor, topic_name):
-    info = executor.run("timeout 5s rostopic info {}".format(shlex.quote(topic_name)), check=False)
+def _topic_details(executor, topic_name, progress=None, topic_key=None):
+    label = "{} {}".format(topic_key, topic_name) if topic_key else topic_name
+    if progress:
+        progress.begin(
+            "Topic {}: reading publishers/subscribers (timeout {}s)".format(
+                label,
+                TOPIC_INFO_TIMEOUT_SECONDS,
+            )
+        )
+    info = executor.run(
+        "timeout {}s rostopic info {}".format(
+            TOPIC_INFO_TIMEOUT_SECONDS,
+            shlex.quote(topic_name),
+        ),
+        check=False,
+    )
+    if progress:
+        progress.finish(
+            "Topic {}: info complete".format(label),
+            timeout_budget=TOPIC_INFO_TIMEOUT_SECONDS,
+        )
     topic_info = _parse_topic_info(info.stdout)
+    if progress:
+        progress.begin(
+            "Topic {}: measuring rate (timeout {}s)".format(
+                label,
+                TOPIC_HZ_TIMEOUT_SECONDS,
+            )
+        )
     rate = executor.run(
-        "timeout 6s rostopic hz -w 5 {}".format(shlex.quote(topic_name)),
+        "timeout {}s rostopic hz -w 5 {}".format(
+            TOPIC_HZ_TIMEOUT_SECONDS,
+            shlex.quote(topic_name),
+        ),
         check=False,
     )
+    if progress:
+        progress.finish(
+            "Topic {}: rate check complete".format(label),
+            timeout_budget=TOPIC_HZ_TIMEOUT_SECONDS,
+        )
+    if progress:
+        progress.begin(
+            "Topic {}: sampling one message (timeout {}s)".format(
+                label,
+                TOPIC_SAMPLE_TIMEOUT_SECONDS,
+            )
+        )
     sample = executor.run(
-        "timeout 5s rostopic echo -n 1 {}".format(shlex.quote(topic_name)),
+        "timeout {}s rostopic echo -n 1 {}".format(
+            TOPIC_SAMPLE_TIMEOUT_SECONDS,
+            shlex.quote(topic_name),
+        ),
         check=False,
     )
+    if progress:
+        progress.finish(
+            "Topic {}: sample complete".format(label),
+            timeout_budget=TOPIC_SAMPLE_TIMEOUT_SECONDS,
+        )
     return {
         "name": topic_name,
         "available": info.ok and bool(topic_info.get("type")),
@@ -323,8 +445,27 @@ def _topic_details(executor, topic_name):
     }
 
 
-def _service_details(executor, service_name):
-    result = executor.run("timeout 5s rosservice type {}".format(shlex.quote(service_name)), check=False)
+def _service_details(executor, service_name, progress=None, service_key=None):
+    label = "{} {}".format(service_key, service_name) if service_key else service_name
+    if progress:
+        progress.begin(
+            "Service {}: reading type (timeout {}s)".format(
+                label,
+                SERVICE_TYPE_TIMEOUT_SECONDS,
+            )
+        )
+    result = executor.run(
+        "timeout {}s rosservice type {}".format(
+            SERVICE_TYPE_TIMEOUT_SECONDS,
+            shlex.quote(service_name),
+        ),
+        check=False,
+    )
+    if progress:
+        progress.finish(
+            "Service {}: type check complete".format(label),
+            timeout_budget=SERVICE_TYPE_TIMEOUT_SECONDS,
+        )
     service_type = (result.stdout or "").strip() if result.ok else None
     return {
         "name": service_name,
@@ -333,20 +474,38 @@ def _service_details(executor, service_name):
     }
 
 
-def _observe_topic_motion(executor, odom_topic, seconds):
+def _observe_motion_timeout(seconds):
+    return max(int(seconds) + 2, 3)
+
+
+def _observe_topic_motion(executor, odom_topic, seconds, progress=None):
+    timeout = _observe_motion_timeout(seconds)
+    if progress:
+        progress.begin(
+            "Observing odometry motion on {} for {}s (timeout {}s)".format(
+                odom_topic,
+                seconds,
+                timeout,
+            )
+        )
     observed = executor.run(
         "timeout {timeout}s rostopic echo -p {topic}".format(
-            timeout=max(int(seconds) + 2, 3),
+            timeout=timeout,
             topic=shlex.quote(odom_topic),
         ),
         check=False,
     )
+    if progress:
+        progress.finish(
+            "Motion observation complete",
+            timeout_budget=timeout,
+        )
     series = _parse_motion_csv(observed.stdout)
     series["duration_seconds"] = seconds
     return series
 
 
-def _exercise_motion(executor, odom_topic, cmd_topic, forward_axis):
+def _exercise_motion(executor, odom_topic, cmd_topic, forward_axis, progress=None):
     linear_x = 0.0
     linear_y = 0.0
     if forward_axis == "x":
@@ -371,7 +530,19 @@ rm -f "${{tmp_file}}"
         linear_x=linear_x,
         linear_y=linear_y,
     )
+    if progress:
+        progress.begin(
+            "Exercising vendor command topic {} while observing {}".format(
+                cmd_topic,
+                odom_topic,
+            )
+        )
     observed = executor.run(command, check=False)
+    if progress:
+        progress.finish(
+            "Vendor command exercise complete",
+            timeout_budget=COMMAND_EXERCISE_TIMEOUT_BUDGET_SECONDS,
+        )
     payload = _parse_motion_csv(observed.stdout)
     payload["command_topic"] = cmd_topic
     payload["forward_axis"] = forward_axis
@@ -479,10 +650,12 @@ def probe_scout_capabilities(
     runner=None,
     artifact_run=None,
     force_remote=False,
+    progress=None,
 ):
     """Probe the live Scout ROS surface and infer capabilities."""
     scout = role_config(site_config, "scout")
     executor = ProbeExecutor(scout, runner=runner or CommandRunner(artifact_run=artifact_run), force_remote=force_remote)
+    progress_tracker = ProbeProgress(progress)
     payload = {
         "ok": False,
         "mode": "ssh" if executor.use_remote else "local",
@@ -508,32 +681,62 @@ def probe_scout_capabilities(
         "errors": [],
     }
 
+    progress_tracker.info("Starting live Scout probe in {} mode".format(payload["mode"]))
+    progress_tracker.begin("Reading ROS environment")
     env_result = executor.run(
         "printf 'ROS_MASTER_URI=%s\nROS_HOSTNAME=%s\nROS_IP=%s\n' \"$ROS_MASTER_URI\" \"$ROS_HOSTNAME\" \"$ROS_IP\"",
         check=False,
     )
     payload["observed"]["ros_environment"] = _parse_env_output(env_result.stdout)
+    progress_tracker.finish("ROS environment captured")
 
-    topic_list_result = executor.run("timeout 8s rostopic list", check=False)
+    progress_tracker.begin(
+        "Listing ROS topics (timeout {}s)".format(TOPIC_LIST_TIMEOUT_SECONDS)
+    )
+    topic_list_result = executor.run(
+        "timeout {}s rostopic list".format(TOPIC_LIST_TIMEOUT_SECONDS),
+        check=False,
+    )
     if not topic_list_result.ok:
         payload["errors"].append("rostopic list failed: {}".format(topic_list_result.stderr.strip() or "unavailable"))
+        progress_tracker.finish(
+            "ROS topic list failed; ending probe",
+            timeout_budget=TOPIC_LIST_TIMEOUT_SECONDS,
+        )
         return payload
+    progress_tracker.finish(
+        "ROS topic list captured",
+        timeout_budget=TOPIC_LIST_TIMEOUT_SECONDS,
+    )
 
     topic_names = {line.strip() for line in topic_list_result.stdout.splitlines() if line.strip()}
-    node_list_result = executor.run("timeout 8s rosnode list", check=False)
+    progress_tracker.begin(
+        "Listing ROS nodes (timeout {}s)".format(NODE_LIST_TIMEOUT_SECONDS)
+    )
+    node_list_result = executor.run(
+        "timeout {}s rosnode list".format(NODE_LIST_TIMEOUT_SECONDS),
+        check=False,
+    )
     payload["observed"]["nodes"] = [line.strip() for line in node_list_result.stdout.splitlines() if line.strip()]
-    service_list_result = executor.run("timeout 8s rosservice list", check=False)
+    progress_tracker.finish(
+        "ROS node list captured",
+        timeout_budget=NODE_LIST_TIMEOUT_SECONDS,
+    )
+    progress_tracker.begin(
+        "Listing ROS services (timeout {}s)".format(SERVICE_LIST_TIMEOUT_SECONDS)
+    )
+    service_list_result = executor.run(
+        "timeout {}s rosservice list".format(SERVICE_LIST_TIMEOUT_SECONDS),
+        check=False,
+    )
     service_names = {line.strip() for line in service_list_result.stdout.splitlines() if line.strip()} if service_list_result.ok else set()
-
-    for device_name in ["camera", "lidar"]:
-        payload["observed"]["devices"][device_name] = _check_device(
-            executor,
-            role_device(scout, device_name),
-            candidates=_candidate_devices(scout, device_name),
-        )
+    progress_tracker.finish(
+        "ROS service list captured" if service_list_result.ok else "ROS service list unavailable; continuing without services",
+        timeout_budget=SERVICE_LIST_TIMEOUT_SECONDS,
+    )
 
     selected_topics = {}
-    for topic_key in ["lidar_scan", "camera_compressed", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS:
+    for topic_key in PROBE_TOPIC_KEYS:
         topic_entry = {
             "configured": role_topic(scout, topic_key),
             "selected": None,
@@ -542,11 +745,11 @@ def probe_scout_capabilities(
         for candidate in _candidate_topics(scout, topic_key):
             if candidate in topic_names:
                 topic_entry["selected"] = candidate
-                topic_entry["details"] = _topic_details(executor, candidate)
                 break
         payload["observed"]["topics"][topic_key] = topic_entry
         selected_topics[topic_key] = topic_entry["selected"]
 
+    selected_services = {}
     for service_key in SERVICE_CANDIDATES:
         service_entry = {
             "selected": None,
@@ -555,9 +758,75 @@ def probe_scout_capabilities(
         for candidate in _candidate_services(service_key):
             if candidate in service_names:
                 service_entry["selected"] = candidate
-                service_entry["details"] = _service_details(executor, candidate)
                 break
         payload["observed"]["services"][service_key] = service_entry
+        selected_services[service_key] = service_entry["selected"]
+
+    selected_topic_count = len([topic for topic in selected_topics.values() if topic])
+    selected_service_count = len([service for service in selected_services.values() if service])
+    device_names = ["camera", "lidar"]
+    device_step_count = len(device_names)
+    motion_observation_will_run = bool(observe_motion_seconds and selected_topics.get("odom"))
+    command_exercise_will_run = bool(
+        exercise_cmd_vel and selected_topics.get("odom") and selected_topics.get("vendor_cmd_vel")
+    )
+    future_steps = (
+        device_step_count
+        + (selected_topic_count * 3)
+        + selected_service_count
+        + 1
+        + 1
+        + 1
+    )
+    timeout_budget = (
+        selected_topic_count * TOPIC_DETAIL_TIMEOUT_BUDGET_SECONDS
+        + selected_service_count * SERVICE_TYPE_TIMEOUT_SECONDS
+    )
+    if motion_observation_will_run:
+        timeout_budget += _observe_motion_timeout(observe_motion_seconds)
+    if command_exercise_will_run:
+        timeout_budget += COMMAND_EXERCISE_TIMEOUT_BUDGET_SECONDS
+    progress_tracker.set_plan(
+        progress_tracker.completed_steps + future_steps,
+        timeout_budget,
+        "Probe work plan: {} topic groups selected, {} services selected".format(
+            selected_topic_count,
+            selected_service_count,
+        ),
+    )
+
+    for device_name in device_names:
+        progress_tracker.begin("Checking Scout {} device candidates".format(device_name))
+        payload["observed"]["devices"][device_name] = _check_device(
+            executor,
+            role_device(scout, device_name),
+            candidates=_candidate_devices(scout, device_name),
+        )
+        progress_tracker.finish("Scout {} device check complete".format(device_name))
+
+    for topic_key in PROBE_TOPIC_KEYS:
+        selected_topic = selected_topics[topic_key]
+        if not selected_topic:
+            progress_tracker.info("Topic {} was not found in the ROS graph".format(topic_key))
+            continue
+        payload["observed"]["topics"][topic_key]["details"] = _topic_details(
+            executor,
+            selected_topic,
+            progress=progress_tracker,
+            topic_key=topic_key,
+        )
+
+    for service_key in SERVICE_CANDIDATES:
+        selected_service = selected_services[service_key]
+        if not selected_service:
+            progress_tracker.info("Service {} was not found in the ROS graph".format(service_key))
+            continue
+        payload["observed"]["services"][service_key]["details"] = _service_details(
+            executor,
+            selected_service,
+            progress=progress_tracker,
+            service_key=service_key,
+        )
 
     odom_details = payload["observed"]["topics"]["odom"].get("details") or {}
     if odom_details.get("sample"):
@@ -568,7 +837,12 @@ def probe_scout_capabilities(
             executor,
             selected_topics["odom"],
             observe_motion_seconds,
+            progress=progress_tracker,
         )
+    elif observe_motion_seconds:
+        progress_tracker.finish("Motion observation skipped because no odom topic was selected")
+    else:
+        progress_tracker.finish("Motion observation skipped (--observe-motion 0)")
 
     if exercise_cmd_vel and selected_topics.get("odom") and selected_topics.get("vendor_cmd_vel"):
         payload["observed"]["command_exercise"] = _exercise_motion(
@@ -576,8 +850,14 @@ def probe_scout_capabilities(
             selected_topics["odom"],
             selected_topics["vendor_cmd_vel"],
             role_motion_setting(scout, "forward_axis", "y"),
+            progress=progress_tracker,
         )
+    elif exercise_cmd_vel:
+        progress_tracker.finish("Vendor command exercise skipped because odom or vendor command topic was missing")
+    else:
+        progress_tracker.finish("Vendor command exercise skipped (--exercise-cmd-vel not set)")
 
+    progress_tracker.begin("Inferring capabilities and site-inventory suggestions")
     lidar_details = payload["observed"]["topics"]["lidar_scan"].get("details") or {}
     camera_details = payload["observed"]["topics"]["camera_compressed"].get("details") or {}
     scout_tof_details = payload["observed"]["topics"]["scout_tof"].get("details") or {}
@@ -628,4 +908,5 @@ def probe_scout_capabilities(
         payload["inferred_capabilities"],
     )
     payload["ok"] = True
+    progress_tracker.finish("Live Scout probe complete")
     return payload
