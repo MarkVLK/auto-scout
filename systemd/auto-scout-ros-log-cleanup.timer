@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Auto-Scout ROS log cleanup
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1d
+Persistent=true
+Unit=auto-scout-ros-log-cleanup.service
+
+[Install]
+WantedBy=timers.target

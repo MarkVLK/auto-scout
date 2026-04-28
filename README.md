@@ -309,6 +309,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |-- rviz/                               # RViz visualization presets.
 |   `-- scout_navigation.rviz           # RViz workspace for scan, map, robot model, and path visualization.
 |-- scripts/                            # Shell entrypoints used by rendered systemd services.
+|   |-- cleanup_ros_logs.py             # Bounds ROS log directories by age and total size.
 |   |-- start_companion_stack.sh        # Starts or stops the companion Docker Compose stack.
 |   `-- start_scout_runtime.sh          # Sources ROS/catkin state and launches the Scout runtime.
 |-- src/                                # Python source tree for CLI, runtime nodes, and helpers.
@@ -352,6 +353,8 @@ This listing covers the maintained tracked project tree and also calls out the l
 |           `-- mission_controller.py   # Lean Python 3 companion smoke mission controller implementation.
 |-- systemd/                            # Example service units; deploy renders role-specific variants from code.
 |   |-- auto-scout-companion-runtime.service # Example companion systemd unit.
+|   |-- auto-scout-ros-log-cleanup.service # Example ROS log retention cleanup unit.
+|   |-- auto-scout-ros-log-cleanup.timer # Example timer for daily ROS log cleanup.
 |   `-- auto-scout-scout-runtime.service # Example Scout systemd unit.
 |-- templates/                          # Placeholder for local or legacy template assets; empty in git.
 |-- tests/                              # Regression coverage for validator, probing, and LD19 parsing behavior.

@@ -674,10 +674,13 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
     service_files = [
         "systemd/auto-scout-scout-runtime.service",
         "systemd/auto-scout-companion-runtime.service",
+        "systemd/auto-scout-ros-log-cleanup.service",
+        "systemd/auto-scout-ros-log-cleanup.timer",
         "container/Dockerfile",
         "container/docker-compose.yml",
         "scripts/start_scout_runtime.sh",
         "scripts/start_companion_stack.sh",
+        "scripts/cleanup_ros_logs.py",
     ]
     missing_service_files = [path for path in service_files if not (REPO_ROOT / path).is_file()]
     if missing_service_files:
@@ -734,6 +737,10 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                 container_issues.append(
                     "companion-runtime must expose AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default"
                 )
+            elif env.get("ROS_LOG_DIR") != "${AUTO_SCOUT_ROS_LOG_DIR:-/srv/auto-scout/ros-logs}":
+                container_issues.append(
+                    "companion-runtime must write ROS logs to the configured storage-backed log directory"
+                )
 
         if "roslaunch auto-scout companion_runtime.launch" not in compose_text:
             container_issues.append("companion-runtime command must launch auto-scout companion_runtime.launch")
@@ -747,6 +754,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime must launch with AUTO_SCOUT_SITE_CONFIG")
         if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in compose_text:
             container_issues.append("companion-runtime must pass AUTO_SCOUT_ODOM_MODEL_TYPE into the container")
+        if "ROS_LOG_DIR" not in compose_text:
+            container_issues.append("companion-runtime must pass ROS_LOG_DIR into the container")
 
     companion_start_path = REPO_ROOT / "scripts" / "start_companion_stack.sh"
     if companion_start_path.is_file():
@@ -759,6 +768,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_LOCALIZATION_MODE with a mapping-safe default")
         if 'AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default")
+        if 'AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must default ROS logs under AUTO_SCOUT_STORAGE_ROOT")
         if 'AUTO_SCOUT_ROS_MASTER_URI="${AUTO_SCOUT_ROS_MASTER_URI:-http://moorebot-scout.local:11311}"' in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must not silently default ROS master settings to moorebot-scout.local")
 
@@ -767,6 +778,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         env_example_text = env_example_path.read_text(encoding="utf-8")
         if "AUTO_SCOUT_ODOM_MODEL_TYPE=diff" not in env_example_text:
             container_issues.append("container/.env.example must document AUTO_SCOUT_ODOM_MODEL_TYPE=diff")
+        if "AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs" not in env_example_text:
+            container_issues.append("container/.env.example must document AUTO_SCOUT_ROS_LOG_DIR")
 
     if dockerfile_path.is_file():
         dockerfile_text = dockerfile_path.read_text(encoding="utf-8")

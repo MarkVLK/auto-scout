@@ -19,6 +19,8 @@ if str(SRC_DIR) not in sys.path:
 import check_scout_compatibility as validator
 from check_scout_compatibility import find_local_markdown_link_targets
 from auto_scout.deploy import _render_companion_service
+from auto_scout.deploy import _render_ros_log_cleanup_service
+from auto_scout.deploy import _render_ros_log_cleanup_timer
 from auto_scout.deploy import _render_scout_service
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
@@ -403,6 +405,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(payload["role"], "scout")
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["service"], "auto-scout-scout-runtime.service")
+        self.assertEqual(payload["ros_log_dir"], "/userdata/auto-scout/ros-logs")
 
     def test_rendered_services_use_saved_ros_endpoints(self):
         site_config = default_site_config()
@@ -417,6 +420,7 @@ class ValidationCliTest(unittest.TestCase):
 
         self.assertIn("Environment=ROS_MASTER_URI=http://moorebot-scout.local:11311", scout_service)
         self.assertIn("Environment=ROS_HOSTNAME=moorebot-scout.local", scout_service)
+        self.assertIn("Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs", scout_service)
         self.assertIn(
             "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
                 site_config["roles"]["scout"]["workspace_dir"]
@@ -425,6 +429,7 @@ class ValidationCliTest(unittest.TestCase):
         )
         self.assertIn("Environment=AUTO_SCOUT_ROS_MASTER_URI=http://moorebot-scout.local:11311", companion_service)
         self.assertIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=auto-scout-pi5.local", companion_service)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs", companion_service)
         self.assertIn(
             "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
                 site_config["roles"]["companion"]["workspace_dir"]
@@ -432,6 +437,25 @@ class ValidationCliTest(unittest.TestCase):
             companion_service,
         )
         self.assertIn("Environment=AUTO_SCOUT_ODOM_MODEL_TYPE=omni", companion_service)
+
+    def test_rendered_ros_log_cleanup_units_bound_age_and_size(self):
+        service_text = _render_ros_log_cleanup_service(
+            "/userdata/catkin_ws/src/auto-scout",
+            "linaro",
+            "linaro",
+            "/userdata/auto-scout/ros-logs",
+            legacy_log_dirs=["/home/linaro/.ros/log"],
+        )
+        timer_text = _render_ros_log_cleanup_timer()
+
+        self.assertIn("Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs", service_text)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_LOG_MAX_AGE_DAYS=7", service_text)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_LOG_MAX_BYTES=104857600", service_text)
+        self.assertIn("--path /userdata/auto-scout/ros-logs", service_text)
+        self.assertIn("--path /home/linaro/.ros/log", service_text)
+        self.assertIn("OnBootSec=5min", timer_text)
+        self.assertIn("OnUnitActiveSec=1d", timer_text)
+        self.assertIn("Persistent=true", timer_text)
 
     def test_service_rendering_fails_fast_on_placeholder_ros_endpoints(self):
         site_config = default_site_config()
@@ -466,6 +490,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}", compose_text)
         self.assertIn("AUTO_SCOUT_SITE_CONFIG: ${AUTO_SCOUT_SITE_CONFIG}", compose_text)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE: ${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}", compose_text)
+        self.assertIn("ROS_LOG_DIR: ${AUTO_SCOUT_ROS_LOG_DIR:-/srv/auto-scout/ros-logs}", compose_text)
         self.assertIn("/run/avahi-daemon/socket:/run/avahi-daemon/socket", compose_text)
         self.assertIn("/run/dbus/system_bus_socket:/run/dbus/system_bus_socket", compose_text)
         self.assertIn("source /opt/catkin_ws/devel/setup.bash", compose_text)
@@ -473,6 +498,8 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("export AUTO_SCOUT_SITE_CONFIG", start_script)
         self.assertIn('AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"', start_script)
         self.assertIn('AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"', start_script)
+        self.assertIn('AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"', start_script)
+        self.assertIn("export AUTO_SCOUT_ROS_LOG_DIR", start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
         self.assertNotIn("moorebot-scout.local", start_script)
@@ -486,6 +513,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("AUTO_SCOUT_ROS_MASTER_URI=http://<scout-host-or-ip>:11311", env_example)
         self.assertIn("AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml", env_example)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE=diff", env_example)
+        self.assertIn("AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs", env_example)
         self.assertIn("ssh-keyscan -H", known_hosts_script)
         self.assertIn("moorebot-scout.local", known_hosts_script)
         self.assertIn("auto-scout-pi5.local", known_hosts_script)

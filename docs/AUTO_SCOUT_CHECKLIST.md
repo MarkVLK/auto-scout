@@ -59,6 +59,15 @@ Reference this when resuming work. Items are ordered by dependency.
   - `/nav_low_bat` is the vendor final docking service
   - `battery_map_return_controller.py` runs on the companion and claims map return only when localization, `move_base`, fresh pose, and the dock approach waypoint are healthy
   - Do not subscribe to or echo `/CoreNode/backing_up`
+- [x] Scout system logging repaired and validated
+  - 2026-04-27 validation: stale legacy `scout-navigation.service` and `scout-web.service` units were stopped, disabled, and removed from systemd
+  - 2026-04-27 validation: `rsyslog` was reinstalled/upgraded to `8.24.0-1+deb9u3`; `/usr/sbin/rsyslogd` exists and `rsyslogd -N1` exits with status 0
+  - 2026-04-27 validation: `rsyslog.service`, `syslog.socket`, and `systemd-journald.service` are active; `auto-scout-scout-runtime.service` remains active and enabled
+  - 2026-04-27 validation: journald persistent storage is enabled at `/var/log/journal` with `SystemMaxUse=32M`, `RuntimeMaxUse=32M`, and `MaxRetentionSec=7day`
+  - 2026-04-27 fix: `ForwardToSyslog=yes` was added to `/etc/systemd/journald.conf` after a live `logger` test showed journald messages were not reaching file-based syslog
+  - 2026-04-27 validation: live test message `auto-scout-rsyslog-verify-1777349420` reached `/var/log/syslog`, `/var/log/messages`, `/var/log/user.log`, and journald
+  - 2026-04-27 validation: `logrotate -d /etc/logrotate.d/rsyslog` completed with status 0; the rsyslog logrotate file currently includes `maxsize 50M`
+  - 2026-04-27 validation: `systemctl --failed` lists only the deferred vendor `rockchip.service`
 
 ### Still To Do on Scout
 - [ ] Print/install the permanent LD19 fixture and lock down the LiDAR cabling
@@ -96,11 +105,28 @@ Reference this when resuming work. Items are ordered by dependency.
   - Current findings are recorded in [ROCKCHIP_SERVICE_FINDINGS.md](ROCKCHIP_SERVICE_FINDINGS.md)
   - Do not restart or edit the service without a deliberate decision; it is a vendor/base-image platform setup service, not an Auto-Scout service
   - 2026-04-27 status: service is enabled but failed because the first-boot marker is missing and the expected `/packages/libmali` payload appears incomplete
+  - 2026-04-27 validation: after rsyslog repair, this remains the only failed systemd unit
 
-- [ ] Investigate ROS log management to prevent root partition fill-up
-  - Check if ROS logs (e.g., `/home/linaro/.ros/log/`) could fill the root partition over time
-  - Consider using `rosclean` or other log rotation mechanisms
-  - Determine if it's worthwhile to implement automated log cleanup
+- [x] Investigate and fix `systemd-tmpfiles-setup.service`
+  - 2026-04-27 post-reboot status: SSH access is restored and `/run/nologin` plus `/etc/nologin` are absent
+  - 2026-04-27 current failed units: `rockchip.service` and `systemd-tmpfiles-setup.service`
+  - Do not rerun `/bin/systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev` on the live Scout. The boot tmpfiles rules can recreate `/run/nologin` outside the normal boot sequence and block normal SSH logins.
+  - 2026-04-27 finding: `/var/log` is a symlink to `/userdata/var_log`, while `/etc/fstab` is still the base unconfigured file. This was not part of the ROS log-retention change, but it may explain the tmpfiles failure when tmpfiles processes `/var/log/*` rules before the symlink target is mounted.
+  - 2026-04-28 correction: the symlink itself is not inherently invalid; the root issue was mount ordering because `/userdata` had no fstab entry and could be unavailable when tmpfiles processed `/var/log/*` rules.
+  - 2026-04-28 fix: added `UUID=3cbb8268-cca9-43e7-a169-49dbab0b02bb /userdata ext2 defaults 0 2` to `/etc/fstab`, backed up at `/etc/fstab.auto-scout-backup-20260428000138`
+  - 2026-04-28 fix: added `/etc/systemd/system/systemd-tmpfiles-setup.service.d/auto-scout-userdata.conf` with `RequiresMountsFor=/userdata`
+  - 2026-04-28 validation after reboot: `systemd-tmpfiles-setup.service` is `active (exited)` with status 0; `systemctl --failed` lists only the deferred `rockchip.service`
+  - 2026-04-28 validation: `/var/log` resolves through the `/userdata` mount, syslog live-write test reached `/var/log/syslog`, `/var/log/messages`, and `/var/log/user.log`
+
+- [x] Implement ROS log management to prevent filesystem fill-up
+  - 2026-04-27 implementation: Scout runtime now exports `ROS_LOG_DIR=/userdata/auto-scout/ros-logs`
+  - 2026-04-27 implementation: companion container now exports `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
+  - 2026-04-27 implementation: `auto-scout-ros-log-cleanup.timer` runs the cleanup service after boot and daily
+  - 2026-04-27 policy: cleanup keeps up to 7 days and 100 MiB per configured ROS log directory
+  - 2026-04-27 validation: Scout cleanup service ran successfully once; `/userdata/auto-scout/ros-logs` was 139K and legacy `/home/linaro/.ros/log` was 2.8M
+  - 2026-04-27 validation: Pi cleanup service ran successfully once; `/srv/auto-scout/ros-logs` was 36K and the companion container reported `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
+  - 2026-04-27 post-reboot validation: Scout runtime and cleanup timer are active; dry-run cleanup exits 0 with `/userdata/auto-scout/ros-logs` at about 264K and legacy `/home/linaro/.ros/log` at 2.8M
+  - 2026-04-27 post-reboot validation: companion runtime and cleanup timer are active; container reports `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
 
 ---
 
@@ -126,6 +152,7 @@ These review items are complete in the current repo. Keep this section as a refe
 - [x] `src/auto_scout/live_probe.py`: passive checks added for battery status, battery guard state, vendor dock status, and `/nav_low_bat` service type
 - [x] `urdf/scout.urdf`: `tof_link` added, initially colocated with `camera_link` until measured on hardware
 - [x] `container/docker-compose.yml`: `AUTO_SCOUT_ODOM_MODEL_TYPE` is threaded into the companion container environment
+- [x] `container/docker-compose.yml`: `ROS_LOG_DIR` is threaded into the companion container environment and defaults to `/srv/auto-scout/ros-logs`
 - [x] `container/.env.example`: required direct Docker Compose variables are documented with placeholders
   ```bash
   AUTO_SCOUT_ROS_MASTER_URI=http://<scout-host-or-ip>:11311
@@ -133,8 +160,11 @@ These review items are complete in the current repo. Keep this section as a refe
   AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml
   AUTO_SCOUT_ODOM_MODEL_TYPE=diff
   AUTO_SCOUT_STORAGE_ROOT=/srv/auto-scout
+  AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs
   AUTO_SCOUT_LOCALIZATION_MODE=false
   ```
+- [x] `scripts/cleanup_ros_logs.py`: ROS log cleanup utility added with `--dry-run`, age pruning, and size pruning
+- [x] `src/auto_scout/deploy.py`: deploy creates ROS log directories and installs `auto-scout-ros-log-cleanup.service` plus `auto-scout-ros-log-cleanup.timer`
 - [x] `src/scout_runtime_config.py` and `src/auto_scout/site_config.py`: generated defaults use explicit `.invalid` placeholders instead of silent `moorebot-scout.local` fallbacks
 - [x] `src/auto_scout/deploy.py`: service rendering fails fast when ROS endpoints are missing or still use generated placeholders
 - [x] `src/auto_scout/deploy.py`: companion service rendering carries the configured Scout drive model through `AUTO_SCOUT_ODOM_MODEL_TYPE`
@@ -243,6 +273,7 @@ These review items are complete in the current repo. Keep this section as a refe
     AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml
     AUTO_SCOUT_ODOM_MODEL_TYPE=diff
     AUTO_SCOUT_STORAGE_ROOT=/srv/auto-scout
+    AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs
     AUTO_SCOUT_LOCALIZATION_MODE=false
     ```
 
@@ -455,6 +486,7 @@ These review items are complete in the current repo. Keep this section as a refe
 |---|---|
 | Scout SSH | `ssh linaro@moorebot-scout.local` |
 | Scout root | `sudo su -` from linaro session |
+| Scout backup root SSH | Key-only root SSH configured and tested via `ssh root@192.168.0.199` on 2026-04-27; `sshd -T` reports `permitrootlogin without-password` |
 | Scout ROS master | `http://moorebot-scout.local:11311` |
 | Historical Scout IP | `192.168.0.199` on 2026-04-25; do not treat as stable DHCP state |
 | Scout LiDAR device | `/dev/ttyS4` at 230400 baud |

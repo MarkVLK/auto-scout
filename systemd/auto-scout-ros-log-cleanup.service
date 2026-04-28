@@ -1,0 +1,14 @@
+# Example unit only. `./auto-scout deploy ...` renders role-specific paths,
+# user/group, and legacy log directories for the target host.
+[Unit]
+Description=Auto-Scout ROS log cleanup
+
+[Service]
+Type=oneshot
+User=linaro
+Group=linaro
+WorkingDirectory=/userdata/catkin_ws/src/auto-scout
+Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs
+Environment=AUTO_SCOUT_ROS_LOG_MAX_AGE_DAYS=7
+Environment=AUTO_SCOUT_ROS_LOG_MAX_BYTES=104857600
+ExecStart=/bin/bash -lc '/userdata/catkin_ws/src/auto-scout/scripts/cleanup_ros_logs.py --path /userdata/auto-scout/ros-logs --path /home/linaro/.ros/log --max-age-days "$AUTO_SCOUT_ROS_LOG_MAX_AGE_DAYS" --max-bytes "$AUTO_SCOUT_ROS_LOG_MAX_BYTES"'
