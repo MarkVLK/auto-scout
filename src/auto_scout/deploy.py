@@ -139,6 +139,9 @@ Description=Auto-Scout ROS log cleanup
 
 [Service]
 Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
 User={service_user}
 Group={service_group}
 WorkingDirectory={workspace_dir}

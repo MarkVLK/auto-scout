@@ -1,7 +1,7 @@
 # Auto-Scout Project Checklist
 
 Generated after architecture review session: April 2026.
-Last Codex update: 2026-04-27.
+Last Codex update: 2026-04-28.
 
 Reference this when resuming work. Items are ordered by dependency.
 
@@ -48,8 +48,10 @@ Reference this when resuming work. Items are ordered by dependency.
   - `/SensorNode/tof` normalizes to `/scout/tof`
   - `/SensorNode/imu` normalizes to `/scout/imu/data`
   - `move_base` now commands `/scout/cmd_vel_planner`
-  - `scout_safety_filter.py` publishes filtered commands to `/scout/cmd_vel_companion`
+  - `scout_safety_filter.py` publishes filtered fresh planner commands to `/scout/cmd_vel_companion`
   - `/scout/safety_state` reports safety state JSON
+  - 2026-04-28 finding: the first safety-filter implementation republished zero Twist commands to `/scout/cmd_vel_companion` whenever sensors or battery guard state were blocked, even with no active planner input. Through `scout_motion_bridge.py`, those zeros reached `/cmd_vel_force` and caused jerky iOS manual driving plus failed app/vendor docking.
+  - 2026-04-28 fix: the safety filter now tracks planner command freshness, reports blocked state continuously, publishes no command before real planner input, and emits at most one stop per active planner episode.
 - [x] Repo support for hybrid low-battery return-to-dock added
   - `scout_battery_dock_guard.py` runs on the Scout runtime and is the low-battery authority
   - `/SensorNode/simple_battery_status` is the battery source
@@ -86,8 +88,10 @@ Reference this when resuming work. Items are ordered by dependency.
   rostopic info /scout/tof
   rostopic info /scout/imu/data
   rostopic echo -n 3 /scout/safety_state
+  timeout 5s rostopic echo -n 1 /scout/cmd_vel_companion
   ```
   Confirm `/scout_tof_bridge`, `/scout_imu_bridge`, and `/scout_safety_filter` are present in `rosnode list`.
+  With no active planner running, `/scout/safety_state` may report a blocked scan or ToF state, but `/scout/cmd_vel_companion` should time out without periodic zero Twist output.
 
 - [ ] After redeploying the Scout runtime, passively verify battery guard and vendor docking surfaces
   ```bash
@@ -127,6 +131,7 @@ Reference this when resuming work. Items are ordered by dependency.
   - 2026-04-27 validation: Pi cleanup service ran successfully once; `/srv/auto-scout/ros-logs` was 36K and the companion container reported `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
   - 2026-04-27 post-reboot validation: Scout runtime and cleanup timer are active; dry-run cleanup exits 0 with `/userdata/auto-scout/ros-logs` at about 264K and legacy `/home/linaro/.ros/log` at 2.8M
   - 2026-04-27 post-reboot validation: companion runtime and cleanup timer are active; container reports `ROS_LOG_DIR=/srv/auto-scout/ros-logs`
+  - 2026-04-28 hardening: cleanup service now runs with lower CPU priority, batch CPU scheduling, and idle I/O scheduling to reduce contention with SSH and runtime processes on SD-card-backed systems
 
 ---
 
@@ -361,6 +366,7 @@ These review items are complete in the current repo. Keep this section as a refe
   ```bash
   docker exec -it auto-scout-melodic rostopic info /scout/cmd_vel_planner
   docker exec -it auto-scout-melodic rostopic echo -n 3 /scout/safety_state
+  docker exec -it auto-scout-melodic timeout 5s rostopic echo -n 1 /scout/cmd_vel_companion
   docker exec -it auto-scout-melodic rostopic info /scout/tof
   docker exec -it auto-scout-melodic rostopic info /scout/imu/data
   docker exec -it auto-scout-melodic rostopic info /SensorNode/simple_battery_status
@@ -369,6 +375,7 @@ These review items are complete in the current repo. Keep this section as a refe
   docker exec -it auto-scout-melodic rosservice type /nav_low_bat
   ```
   If you run a motion command test, publish to `/scout/cmd_vel_planner` in a safe area so the safety filter remains in the path.
+  With no active planner running, `/scout/cmd_vel_companion` should not publish periodic zero Twist messages.
   Do not call `/nav_low_bat` from this validation step.
 
 ---
@@ -386,6 +393,7 @@ These review items are complete in the current repo. Keep this section as a refe
 - [ ] Confirm `/odom` motion dynamically with `--observe-motion` before trusting a map
 - [ ] Drive Scout manually around the house while gmapping runs
   - Use the Scout iOS app for manual driving during this phase
+  - Before driving, confirm no navigation planner is active and `/scout/cmd_vel_companion` is not publishing periodic zero Twist messages
   - Drive slowly and avoid doorways on the first pass
   - Cover all rooms you want patrolled
 - [ ] Save the map
@@ -431,7 +439,9 @@ These review items are complete in the current repo. Keep this section as a refe
 - [ ] Live vendor final docking test near dock
   - Put Scout near the charging dock first
   - Clear the area
+  - Confirm `/scout/cmd_vel_companion` is quiet before pressing the app return-to-dock button
   - Confirm `/CoreNode/going_home_status` transitions to success
+  - Direct app return-to-dock should complete without Auto-Scout publishing stop packets to `/cmd_vel_force`
   - Keep `roles.scout.capabilities.dock: false` until this passes
 - [ ] Live mapped dock approach test
   - Start from the mapped pre-dock approach area
@@ -464,8 +474,8 @@ These review items are complete in the current repo. Keep this section as a refe
 | Odometry normalized | `/odom` | Present 2026-04-26 after repo Scout runtime deploy |
 | Motion control | `/cmd_vel_force` | Live topic confirmed; overrides internal nav stack; Scout forward axis is `linear.y` |
 | Motion planner input | `/scout/cmd_vel_planner` | Raw `move_base` output; safety filter input after latest repo changes |
-| Motion control companion input | `/scout/cmd_vel_companion` | Safety-filtered command; `scout_motion_bridge.py` remaps to `/cmd_vel_force` |
-| Safety state | `/scout/safety_state` | JSON state from `scout_safety_filter.py`; verify after redeploy |
+| Motion control companion input | `/scout/cmd_vel_companion` | Safety-filtered fresh planner command; must stay quiet with no active planner |
+| Safety state | `/scout/safety_state` | JSON state from `scout_safety_filter.py`, including command freshness and suppression fields; verify after redeploy |
 | Battery status source | `/SensorNode/simple_battery_status` | Vendor `roller_eye/status`; status index 1 is battery percent and index 2 is charging flag |
 | Battery guard state | `/scout/battery_guard_state` | JSON mode from `scout_battery_dock_guard.py`; verify after redeploy |
 | Battery guard control | `/scout/battery_guard_control` | Companion control channel for map-return claim, vendor dock request, and map-return failure |
@@ -513,6 +523,7 @@ These review items are complete in the current repo. Keep this section as a refe
 - Do not use `/etc/hosts` for peer device addresses; if mDNS is blocked, prefer router DNS or DHCP hostname registration.
 - Use `/cmd_vel_force`, not `/cmd_vel`, for external motion control.
 - Normal autonomy should publish to `/scout/cmd_vel_planner`; `/cmd_vel_force` is reached only after safety filtering and `scout_motion_bridge.py`.
+- The safety filter is a planner-command gate, not a continuous owner of vendor motion. It must not publish periodic zero commands while iOS manual driving or vendor docking owns motion.
 - Scout forward motion is on `linear.y`; `scout_motion_bridge.py` handles remapping after `/scout/cmd_vel_companion`.
 - Built-in ToF and IMU are supporting sensors. They add command safety and pose context, but they are not a replacement for `/scan` during mapping or patrol.
 - Low battery overrides normal Auto-Scout work. The Scout-local guard is authoritative and vendor `/nav_low_bat` is always the final physical docking step.

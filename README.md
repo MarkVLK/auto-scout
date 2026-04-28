@@ -87,13 +87,13 @@ For the rooted Scout unit validated in the LiDAR bring-up transcript, treat thes
 - Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch`
 - Scout built-in sensor path: vendor ToF and IMU topics are normalized to `/scout/tof` and `/scout/imu/data`
 - Scout low-battery path: `scout_battery_dock_guard.py` watches `/SensorNode/simple_battery_status`, publishes `/scout/battery_guard_state`, accepts `/scout/battery_guard_control`, monitors `/CoreNode/going_home_status`, and calls vendor `/nav_low_bat` only when a return-to-dock action is required
-- Scout command safety path: `move_base` publishes `/scout/cmd_vel_planner`, `scout_safety_filter.py` gates that command, and `scout_motion_bridge.py` sends only filtered `/scout/cmd_vel_companion` commands to `/cmd_vel_force`
+- Scout command safety path: `move_base` publishes `/scout/cmd_vel_planner`, `scout_safety_filter.py` gates fresh planner commands only, and `scout_motion_bridge.py` sends only filtered `/scout/cmd_vel_companion` commands to `/cmd_vel_force`
 
 If your rooted Scout can strafe, set `roles.scout.motion.drive_model` to `omni`. Keep `roles.scout.motion.forward_axis` separate from that choice; axis remapping and AMCL motion modeling are different contracts.
 
 Do not treat building upstream C++ LD19 packages on the Scout as the supported baseline for this image. The current repo path is source-only deploy plus the built-in Python serial driver, with live probe and validation used to confirm the real unit still matches the saved inventory.
 
-The built-in ToF and IMU are supporting sensors, not replacements for the LD19. The ToF input is used for close-range caution/stop behavior, IMU is bridged as pose-context data for later validation, and a stale or missing `/scan` still stops normal autonomous command flow.
+The built-in ToF and IMU are supporting sensors, not replacements for the LD19. The ToF input is used for close-range caution/stop behavior, IMU is bridged as pose-context data for later validation, and a stale or missing `/scan` still stops normal autonomous planner commands. When no fresh planner command is active, the safety filter reports state but must not publish periodic stops that interfere with iOS manual driving or vendor docking.
 
 ## Low-Battery Return-To-Dock
 
@@ -106,7 +106,7 @@ Low battery is handled by a hybrid guard:
 - If the companion cannot claim, is too slow, or fails, Scout falls back directly to the vendor `/nav_low_bat` routine.
 - The final physical docking step is always vendor docking, monitored through `/CoreNode/going_home_status`.
 
-`scout_safety_filter.py` blocks normal planner commands while the guard is in `return_required`, `vendor_docking`, `failed`, or `charging`. It allows planner commands during `map_return` so the companion can drive to the mapped dock approach waypoint.
+`scout_safety_filter.py` blocks normal planner commands while the guard is in `return_required`, `vendor_docking`, `failed`, or `charging`. It publishes at most one stop for an active planner episode, then stays quiet unless fresh planner commands resume. It allows planner commands during `map_return` so the companion can drive to the mapped dock approach waypoint.
 
 ## Mission Goals
 
@@ -131,7 +131,7 @@ Feasible path:
 - Save one occupancy grid per floor or operating area.
 - Define named room goals and a room-to-waypoint graph in YAML.
 - Run `amcl` + `move_base` on the companion.
-- Let `move_base` command `/scout/cmd_vel_planner`; the Scout-side safety filter publishes the filtered `/scout/cmd_vel_companion`.
+- Let `move_base` command `/scout/cmd_vel_planner`; the Scout-side safety filter publishes filtered `/scout/cmd_vel_companion` only while fresh planner commands are active.
 - Capture stills or short clips at each patrol goal.
 - Persist media to the companion first, then optionally fan out to webhooks or cloud storage.
 

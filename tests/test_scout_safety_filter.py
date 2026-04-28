@@ -11,6 +11,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from scout_safety_filter import ScoutCommandPublishPolicy
 from scout_safety_filter import ScoutSafetyLogic
 
 
@@ -169,6 +170,115 @@ class ScoutSafetyLogicTest(unittest.TestCase):
             self.assertTrue(decision["blocked"])
             self.assertAlmostEqual(decision["command"].linear.x, 0.0)
             self.assertAlmostEqual(decision["command"].angular.z, 0.0)
+
+
+class ScoutCommandPublishPolicyTest(unittest.TestCase):
+    def make_logic(self):
+        return ScoutSafetyLogic(twist_type=Twist)
+
+    def make_policy(self):
+        return ScoutCommandPublishPolicy(command_stale_timeout=0.5)
+
+    def clear_decision(self, logic, command=None, mode=None):
+        return logic.decide(
+            command or twist(),
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=0.1,
+            battery_guard_mode=mode,
+        )
+
+    def stale_scan_decision(self, logic, command=None):
+        return logic.decide(
+            command or twist(),
+            tof_seen=True,
+            tof_range=0.5,
+            tof_age=0.1,
+            scan_seen=True,
+            scan_age=1.5,
+        )
+
+    def test_no_planner_input_does_not_publish_stop_when_scan_unavailable(self):
+        logic = self.make_logic()
+        policy = self.make_policy()
+        decision = logic.decide(twist(), tof_seen=True, tof_range=0.5, tof_age=0.1, scan_seen=False)
+
+        result = policy.decide_publish(decision, now=0.0)
+
+        self.assertEqual(decision["state"], "scan_unavailable")
+        self.assertFalse(result["publish"])
+        self.assertFalse(result["command_active"])
+        self.assertIsNone(result["command_age"])
+        self.assertTrue(result["command_suppressed"])
+
+    def test_blocked_active_planner_publishes_one_stop_only(self):
+        logic = self.make_logic()
+        policy = self.make_policy()
+        command = twist()
+
+        policy.note_command(0.0)
+        first = policy.decide_publish(self.stale_scan_decision(logic, command), now=0.0, command_event=True)
+        second = policy.decide_publish(self.stale_scan_decision(logic, command), now=0.1)
+        policy.note_command(0.2)
+        third = policy.decide_publish(self.stale_scan_decision(logic, command), now=0.2, command_event=True)
+
+        self.assertTrue(first["publish"])
+        self.assertTrue(first["publish_stop"])
+        self.assertFalse(second["publish"])
+        self.assertTrue(second["command_suppressed"])
+        self.assertFalse(third["publish"])
+        self.assertTrue(third["command_suppressed"])
+
+    def test_command_stream_expiry_publishes_one_stop_then_stays_quiet(self):
+        logic = self.make_logic()
+        policy = self.make_policy()
+        command = twist()
+
+        policy.note_command(0.0)
+        first = policy.decide_publish(self.clear_decision(logic, command), now=0.0, command_event=True)
+        stale = policy.decide_publish(self.clear_decision(logic, command), now=0.6)
+        repeated = policy.decide_publish(self.clear_decision(logic, command), now=0.7)
+
+        self.assertTrue(first["publish"])
+        self.assertFalse(first["publish_stop"])
+        self.assertTrue(stale["publish"])
+        self.assertTrue(stale["publish_stop"])
+        self.assertFalse(stale["command_active"])
+        self.assertFalse(repeated["publish"])
+
+    def test_battery_guard_block_modes_do_not_repeat_stop_commands(self):
+        logic = self.make_logic()
+        for mode in ["vendor_docking", "charging", "failed"]:
+            policy = self.make_policy()
+            command = twist()
+
+            policy.note_command(0.0)
+            first = policy.decide_publish(self.clear_decision(logic, command, mode=mode), now=0.0, command_event=True)
+            second = policy.decide_publish(self.clear_decision(logic, command, mode=mode), now=0.1)
+            policy.note_command(0.2)
+            third = policy.decide_publish(self.clear_decision(logic, command, mode=mode), now=0.2, command_event=True)
+
+            self.assertTrue(first["publish"])
+            self.assertTrue(first["publish_stop"])
+            self.assertFalse(second["publish"])
+            self.assertTrue(second["command_suppressed"])
+            self.assertFalse(third["publish"])
+            self.assertTrue(third["command_suppressed"])
+
+    def test_map_return_continues_to_publish_safe_planner_commands(self):
+        logic = self.make_logic()
+        policy = self.make_policy()
+        command = twist(linear_x=0.2)
+
+        policy.note_command(0.0)
+        result = policy.decide_publish(self.clear_decision(logic, command, mode="map_return"), now=0.0, command_event=True)
+
+        self.assertTrue(result["publish"])
+        self.assertFalse(result["publish_stop"])
+        self.assertTrue(result["command_active"])
+        self.assertFalse(result["command_suppressed"])
 
 
 if __name__ == "__main__":

@@ -112,6 +112,7 @@ safety:
   tof_stale_timeout: 1.0
   scan_watchdog_enabled: true
   scan_stale_timeout: 1.0
+  command_stale_timeout: 0.5
   caution_speed: 0.05
 
 lidar:

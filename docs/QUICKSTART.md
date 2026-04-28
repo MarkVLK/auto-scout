@@ -79,7 +79,7 @@ Before touching autonomy:
 
 If pose is missing, stop here. `slam_gmapping` and `move_base` will not behave well without it.
 Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is still unproven.
-Do not treat camera, ToF, or IMU as a LiDAR fallback for normal autonomy; the current safety filter stops or slows commands when ToF is close and stops command flow when `/scan` is stale.
+Do not treat camera, ToF, or IMU as a LiDAR fallback for normal autonomy; the current safety filter stops or slows fresh planner commands when ToF is close and stops planner command flow when `/scan` is stale. With no active planner command, `/scout/safety_state` may report a blocked state, but `/scout/cmd_vel_companion` should stay quiet so manual app driving and vendor docking can own the robot.
 Do not call `/nav_low_bat` during bring-up unless the robot is near the dock and an operator has explicitly confirmed a live docking test.
 
 ## 3. Start Mapping On The Companion
@@ -114,7 +114,7 @@ rosrun map_server map_saver -f /srv/auto-scout/maps/house_map
 roslaunch auto-scout navigation.launch map_file:=/srv/auto-scout/maps/house_map.yaml
 ```
 
-`move_base` publishes raw planner output to `/scout/cmd_vel_planner`. The Scout-side safety filter publishes only approved commands to `/scout/cmd_vel_companion`, which `scout_motion_bridge.py` remaps to `/cmd_vel_force`.
+`move_base` publishes raw planner output to `/scout/cmd_vel_planner`. The Scout-side safety filter publishes only approved fresh planner commands to `/scout/cmd_vel_companion`, which `scout_motion_bridge.py` remaps to `/cmd_vel_force`. If no planner is running, `/scout/cmd_vel_companion` should not emit periodic zero commands.
 
 Then define room goals in [config/scout_config.yaml](../config/scout_config.yaml).
 

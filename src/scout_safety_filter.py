@@ -204,6 +204,64 @@ class ScoutSafetyLogic(object):
         )
 
 
+class ScoutCommandPublishPolicy(object):
+    """Decide when the safety filter should take ownership of command output."""
+
+    def __init__(self, command_stale_timeout=0.5):
+        self.command_stale_timeout = float(command_stale_timeout)
+        self.last_command_time = None
+        self.was_command_active = False
+        self.stop_sent_for_episode = False
+
+    def command_age(self, now):
+        if self.last_command_time is None:
+            return None
+        return max(0.0, float(now) - self.last_command_time)
+
+    def is_command_active(self, now):
+        age = self.command_age(now)
+        return age is not None and age <= self.command_stale_timeout
+
+    def note_command(self, now):
+        if not self.is_command_active(now):
+            self.stop_sent_for_episode = False
+        self.last_command_time = float(now)
+
+    def decide_publish(self, decision, now, command_event=False):
+        age = self.command_age(now)
+        command_active = age is not None and age <= self.command_stale_timeout
+        stale_transition = self.was_command_active and not command_active
+        publish = False
+        publish_stop = False
+
+        if command_active:
+            if decision["blocked"]:
+                if not self.stop_sent_for_episode:
+                    publish = True
+                    publish_stop = True
+                    self.stop_sent_for_episode = True
+            elif command_event:
+                publish = True
+                self.stop_sent_for_episode = False
+        elif stale_transition and not self.stop_sent_for_episode:
+            publish = True
+            publish_stop = True
+            self.stop_sent_for_episode = True
+
+        command_suppressed = False
+        if not publish:
+            command_suppressed = bool(decision["blocked"] or stale_transition)
+
+        self.was_command_active = command_active
+        return {
+            "publish": publish,
+            "publish_stop": publish_stop,
+            "command_active": command_active,
+            "command_age": age,
+            "command_suppressed": command_suppressed,
+        }
+
+
 class ScoutSafetyFilterNode(object):
     """ROS node that publishes only commands allowed by Scout-local safety checks."""
 
@@ -270,6 +328,9 @@ class ScoutSafetyFilterNode(object):
         )
         self.publish_hz = float(rospy.get_param("~publish_hz", safety.get("publish_hz", 10.0)))
         self.state_publish_period = float(rospy.get_param("~state_publish_period", 1.0))
+        self.command_policy = ScoutCommandPublishPolicy(
+            rospy.get_param("~command_stale_timeout", safety.get("command_stale_timeout", 0.5))
+        )
 
         self.latest_command = None
         self.tof_seen = False
@@ -302,8 +363,10 @@ class ScoutSafetyFilterNode(object):
         return max(0.0, (now - stamp).to_sec())
 
     def command_callback(self, msg):
+        now = self._now()
         self.latest_command = msg
-        self._publish_decision(force_command=True)
+        self.command_policy.note_command(now.to_sec())
+        self._publish_decision(command_event=True, now=now)
 
     def tof_callback(self, msg):
         self.tof_seen = True
@@ -322,12 +385,15 @@ class ScoutSafetyFilterNode(object):
         if isinstance(payload, dict):
             self.battery_guard_mode = str(payload.get("mode") or "idle")
 
-    def _state_payload(self, decision):
+    def _state_payload(self, decision, publish_status):
         return {
             "state": decision["state"],
             "blocked": decision["blocked"],
             "reason": decision["reason"],
             "battery_guard_mode": self.battery_guard_mode,
+            "command_active": publish_status["command_active"],
+            "command_age": publish_status["command_age"],
+            "command_suppressed": publish_status["command_suppressed"],
             "tof_range": decision["tof_range"],
             "tof_age": decision["tof_age"],
             "scan_age": decision["scan_age"],
@@ -337,8 +403,8 @@ class ScoutSafetyFilterNode(object):
             "scan_topic": self.scan_topic,
         }
 
-    def _publish_state(self, decision, now, force=False):
-        payload_json = json.dumps(self._state_payload(decision), sort_keys=True)
+    def _publish_state(self, decision, publish_status, now, force=False):
+        payload_json = json.dumps(self._state_payload(decision, publish_status), sort_keys=True)
         should_publish = force or payload_json != self.last_state_json
         if not should_publish and self.last_state_publish is not None:
             should_publish = (now - self.last_state_publish).to_sec() >= self.state_publish_period
@@ -348,8 +414,9 @@ class ScoutSafetyFilterNode(object):
         self.last_state_json = payload_json
         self.last_state_publish = now
 
-    def _publish_decision(self, force_command=False):
-        now = self._now()
+    def _publish_decision(self, command_event=False, now=None):
+        if now is None:
+            now = self._now()
         command = self.latest_command or self.Twist()
         decision = self.logic.decide(
             command,
@@ -360,9 +427,13 @@ class ScoutSafetyFilterNode(object):
             scan_age=self._age(self.last_scan_time, now),
             battery_guard_mode=self.battery_guard_mode,
         )
-        if force_command or decision["blocked"]:
-            self.command_pub.publish(decision["command"])
-        self._publish_state(decision, now, force=force_command)
+        publish_status = self.command_policy.decide_publish(decision, now.to_sec(), command_event=command_event)
+        if publish_status["publish"]:
+            output_command = decision["command"]
+            if publish_status["publish_stop"]:
+                output_command = self.logic.zero_twist(command)
+            self.command_pub.publish(output_command)
+        self._publish_state(decision, publish_status, now, force=command_event)
 
     def run(self):
         self.rospy.loginfo(
@@ -374,7 +445,7 @@ class ScoutSafetyFilterNode(object):
         )
         rate = self.rospy.Rate(self.publish_hz)
         while not self.rospy.is_shutdown():
-            self._publish_decision(force_command=False)
+            self._publish_decision(command_event=False)
             rate.sleep()
 
 

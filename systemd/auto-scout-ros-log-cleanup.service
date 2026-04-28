@@ -5,6 +5,9 @@ Description=Auto-Scout ROS log cleanup
 
 [Service]
 Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
 User=linaro
 Group=linaro
 WorkingDirectory=/userdata/catkin_ws/src/auto-scout

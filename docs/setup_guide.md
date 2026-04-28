@@ -109,10 +109,10 @@ The Scout runtime now normalizes the built-in ToF and IMU topics before they are
 The command path is intentionally split:
 
 - `move_base` publishes raw planner commands to `/scout/cmd_vel_planner`
-- `scout_safety_filter.py` watches `/scan` and `/scout/tof`, then publishes approved commands to `/scout/cmd_vel_companion`
+- `scout_safety_filter.py` watches `/scan` and `/scout/tof`, then publishes approved fresh planner commands to `/scout/cmd_vel_companion`
 - `scout_motion_bridge.py` remaps `/scout/cmd_vel_companion` into the vendor `/cmd_vel_force` topic
 
-Configured safety behavior lives under `safety` in `config/scout_config.yaml`. By default, ToF is optional but used when present, close ToF readings slow or stop forward motion, and stale `/scan` stops normal autonomous command flow.
+Configured safety behavior lives under `safety` in `config/scout_config.yaml`. By default, ToF is optional but used when present, close ToF readings slow or stop fresh planner commands, and stale `/scan` stops normal autonomous command flow. With no fresh planner command active, the filter continues publishing `/scout/safety_state` but does not publish periodic zero commands that would interfere with iOS manual driving or vendor docking.
 
 This is not a camera/ToF/IMU navigation fallback. Full mapping and patrol still require a healthy `/scan` plus pose source. The built-in sensors add close-range safety and pose context while preserving the LD19 as the required obstacle/mapping sensor.
 
