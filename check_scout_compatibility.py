@@ -550,7 +550,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             "scout_odom_bridge",
         ],
         "launch/companion_runtime.launch": ["companion_runtime_agent", "battery_map_return_controller"],
-        "launch/navigation.launch": ["map_file_guard", "map_server", "amcl", "move_base"],
+        "launch/navigation.launch": ["robot_state_publisher", "map_file_guard", "map_server", "amcl", "move_base"],
         "launch/slam_mapping.launch": ["robot_state_publisher", "slam_gmapping"],
     }
     for relative_path, node_names in expected_nodes.items():

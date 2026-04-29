@@ -26,7 +26,18 @@ Start with the role-aware validator from this repo:
 
 Before you expect runtime validation or `./auto-scout run smoke-loop` to pass, make sure `config/site_local.yaml` reflects what is actually proven on your Scout and Raspberry Pi 5. The tracked [config/site.yaml](../config/site.yaml) file is only the sample baseline.
 
-For the smoke-loop notification gate, keep the real webhook URL out of tracked config and write it only to `config/site_local.yaml`:
+For the smoke-loop notification gate, use a Slack app incoming webhook and keep the real URL out of tracked config:
+
+1. Create a Slack app in the Slack workspace you manage.
+2. Enable **Incoming Webhooks** for the app.
+3. Add a webhook to the channel where Auto-Scout should post.
+4. Store the generated URL only in your shell or ignored local inventory:
+
+```bash
+export AUTO_SCOUT_NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/..."
+```
+
+Write it to `config/site_local.yaml`, which is ignored by git:
 
 ```bash
 ./auto-scout configure companion \
@@ -35,6 +46,14 @@ For the smoke-loop notification gate, keep the real webhook URL out of tracked c
   --enable-notify \
   --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
 ```
+
+Then send a one-off test message:
+
+```bash
+./auto-scout notify test
+```
+
+Slack webhook URLs are secrets, and Slack documents that leaked URLs may be revoked. Do not commit them, paste them into issues, or publish local artifacts that captured old webhook snapshots. `config/site_local.yaml`, `config/secrets.yaml`, and `artifacts/` are ignored by this repo for that reason.
 
 If you run full system validation from the Pi, provision SSH known hosts first:
 

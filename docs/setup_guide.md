@@ -132,7 +132,7 @@ not block mission departure by itself; missions may drive off the dock once
 battery is at or above `safety.mission_start_min_battery_level` (default 50%).
 Below that start threshold, the companion refuses the mission before sending
 navigation goals and notifies the operator with the current battery percentage
-when a webhook URL is configured.
+when the companion Slack incoming webhook is configured.
 
 The companion can improve the return path, but it is not required for safety:
 
@@ -344,8 +344,20 @@ If those batch SSH checks fail because the Pi's default key is
 passphrase-protected, use a separate Pi-local validation key and host-specific
 `~/.ssh/config` entries instead of disabling host-key checks.
 
-Before expecting `run smoke-loop` to pass, keep the real webhook URL in the
-untracked site inventory and enable the companion notification capability:
+Before expecting `run smoke-loop` to pass, configure a Slack app incoming
+webhook for companion notifications:
+
+1. Create a Slack app in the free-tier or paid workspace you manage.
+2. Enable **Incoming Webhooks** for that app.
+3. Add a webhook to the channel that should receive Scout/Pi companion notices.
+4. Export the generated URL locally:
+
+```bash
+export AUTO_SCOUT_NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/..."
+```
+
+Keep the real URL in the untracked site inventory and enable the companion
+notification capability:
 
 ```bash
 ./auto-scout configure companion \
@@ -355,6 +367,18 @@ untracked site inventory and enable the companion notification capability:
   --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
 ```
 
+Confirm delivery with:
+
+```bash
+./auto-scout notify test
+```
+
+Slack webhook URLs are secrets, and Slack documents that leaked URLs may be
+revoked. Never commit the URL or publish local run artifacts that captured
+earlier webhook snapshots. This repo ignores
+`config/site_local.yaml`, `config/secrets.yaml`, and `artifacts/`, but ignored
+files can still leak if copied elsewhere.
+
 ## 14. Source References
 
 - [Moorebot Scout product page](https://www.moorebot.com/en-ca/products/moorebot-scout)
@@ -363,3 +387,5 @@ untracked site inventory and enable the companion notification capability:
 - [Pilot-Labs-Dev/Scout-open-source](https://github.com/Pilot-Labs-Dev/Scout-open-source)
 - [ROS REP-3 target platforms](https://www.ros.org/reps/rep-0003.html)
 - [m-explore / explore_lite](https://index.ros.org/r/m_explore/)
+- [Slack incoming webhooks](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks)
+- [Slack incoming-webhook scope](https://docs.slack.dev/reference/scopes/incoming-webhook/)

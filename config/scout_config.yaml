@@ -21,7 +21,6 @@ storage:
   companion_map_dir: "/srv/auto-scout/maps"
   companion_media_dir: "/srv/auto-scout/media"
   companion_event_dir: "/srv/auto-scout/events"
-  webhook_url: ""
 
 topics:
   lidar_scan: "/scan"

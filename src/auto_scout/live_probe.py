@@ -61,6 +61,9 @@ SENSOR_TOPIC_KEYS = ["scout_tof", "tof_range", "scout_imu", "imu_data"]
 COMMAND_TOPIC_KEYS = ["vendor_cmd_vel", "planner_cmd_vel", "autonomy_cmd_vel", "safety_state"]
 BATTERY_TOPIC_KEYS = ["battery_status", "battery_guard_state", "vendor_dock_status"]
 PROBE_TOPIC_KEYS = ["lidar_scan", "camera_compressed", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS
+REQUIRED_DYNAMIC_TF_EDGES = [("odom", "base_link")]
+REQUIRED_STATIC_TF_EDGES = [("base_link", "base_laser")]
+REQUIRED_TF_EDGES = REQUIRED_DYNAMIC_TF_EDGES + REQUIRED_STATIC_TF_EDGES
 
 SERVICE_CANDIDATES = {
     "vendor_low_battery_dock": ["/nav_low_bat"],
@@ -88,6 +91,7 @@ NODE_LIST_TIMEOUT_SECONDS = 8
 SERVICE_LIST_TIMEOUT_SECONDS = 8
 SERVICE_TYPE_TIMEOUT_SECONDS = 5
 COMMAND_EXERCISE_TIMEOUT_BUDGET_SECONDS = 8
+TF_SAMPLE_TIMEOUT_SECONDS = 5
 
 
 def _format_seconds(seconds):
@@ -166,6 +170,7 @@ def _wrap_bash(body):
 def _ros_shell_prefix(role_settings):
     commands = [
         "if [ -f /opt/ros/melodic/setup.bash ]; then . /opt/ros/melodic/setup.bash; fi",
+        'export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"',
     ]
     master_uri = role_ros_setting(role_settings, "master_uri")
     advertise_host = role_ros_setting(role_settings, "advertise_host")
@@ -233,6 +238,33 @@ def _parse_odom_snapshot(text):
     if orientation_match:
         payload["orientation_w"] = float(orientation_match.group(1))
     return payload
+
+
+def _normalize_frame_id(frame_id):
+    return str(frame_id or "").strip().strip('"').lstrip("/")
+
+
+def _parse_tf_edges(text):
+    edges = []
+    pattern = re.compile(
+        r"(?m)^\s*frame_id:\s*\"?/?([^\"\n]+)\"?(?:.|\n)*?^\s*child_frame_id:\s*\"?/?([^\"\n]+)\"?"
+    )
+    for parent, child in pattern.findall(text or ""):
+        parent = _normalize_frame_id(parent)
+        child = _normalize_frame_id(child)
+        if parent and child:
+            edge = {"parent": parent, "child": child}
+            if edge not in edges:
+                edges.append(edge)
+    return edges
+
+
+def _edge_tuple(edge):
+    return (_normalize_frame_id(edge.get("parent")), _normalize_frame_id(edge.get("child")))
+
+
+def _format_tf_edges(edges):
+    return [{"parent": parent, "child": child} for parent, child in sorted(edges)]
 
 
 def _first_matching_keynames(fieldnames, suffixes):
@@ -442,6 +474,104 @@ def _topic_details(executor, topic_name, progress=None, topic_key=None):
         "subscribers": topic_info.get("subscribers", []),
         "hz": _parse_rate(rate.stdout),
         "sample": sample.stdout,
+    }
+
+
+def _tf_topic_details(executor, topic_name, progress=None, label=None):
+    topic_label = label or topic_name
+    if progress:
+        progress.begin(
+            "TF {}: reading publishers/subscribers (timeout {}s)".format(
+                topic_label,
+                TOPIC_INFO_TIMEOUT_SECONDS,
+            )
+        )
+    info = executor.run(
+        "timeout {}s rostopic info {}".format(
+            TOPIC_INFO_TIMEOUT_SECONDS,
+            shlex.quote(topic_name),
+        ),
+        check=False,
+    )
+    if progress:
+        progress.finish(
+            "TF {}: info complete".format(topic_label),
+            timeout_budget=TOPIC_INFO_TIMEOUT_SECONDS,
+        )
+    topic_info = _parse_topic_info(info.stdout)
+
+    if progress:
+        progress.begin(
+            "TF {}: sampling transforms (timeout {}s)".format(
+                topic_label,
+                TF_SAMPLE_TIMEOUT_SECONDS,
+            )
+        )
+    sample = executor.run(
+        "timeout {}s rostopic echo {}".format(
+            TF_SAMPLE_TIMEOUT_SECONDS,
+            shlex.quote(topic_name),
+        ),
+        check=False,
+    )
+    if progress:
+        progress.finish(
+            "TF {}: sample complete".format(topic_label),
+            timeout_budget=TF_SAMPLE_TIMEOUT_SECONDS,
+        )
+    return {
+        "name": topic_name,
+        "available": info.ok and topic_info.get("type") == "tf2_msgs/TFMessage",
+        "type": topic_info.get("type"),
+        "publishers": topic_info.get("publishers", []),
+        "subscribers": topic_info.get("subscribers", []),
+        "edges": _parse_tf_edges(sample.stdout),
+        "sample": sample.stdout,
+    }
+
+
+def _tf_details(executor, topic_names, progress=None):
+    dynamic = None
+    static = None
+    if "/tf" in topic_names:
+        dynamic = _tf_topic_details(executor, "/tf", progress=progress, label="/tf")
+    if "/tf_static" in topic_names:
+        static = _tf_topic_details(executor, "/tf_static", progress=progress, label="/tf_static")
+
+    dynamic_edges = set(_edge_tuple(edge) for edge in (dynamic or {}).get("edges", []))
+    static_edges = set(_edge_tuple(edge) for edge in (static or {}).get("edges", []))
+    observed_edges = dynamic_edges.union(static_edges)
+    required_edges = set(REQUIRED_TF_EDGES)
+    missing_dynamic_edges = set(REQUIRED_DYNAMIC_TF_EDGES).difference(dynamic_edges)
+    missing_static_edges = set(REQUIRED_STATIC_TF_EDGES).difference(static_edges)
+    missing_edges = missing_dynamic_edges.union(missing_static_edges)
+    return {
+        "ok": not missing_edges,
+        "required_edges": _format_tf_edges(required_edges),
+        "observed_edges": _format_tf_edges(observed_edges),
+        "missing_edges": _format_tf_edges(missing_edges),
+        "missing_dynamic_edges": _format_tf_edges(missing_dynamic_edges),
+        "missing_static_edges": _format_tf_edges(missing_static_edges),
+        "dynamic": dynamic
+        or {
+            "name": "/tf",
+            "available": False,
+            "type": None,
+            "publishers": [],
+            "subscribers": [],
+            "edges": [],
+            "sample": "",
+        },
+        "static": static
+        or {
+            "name": "/tf_static",
+            "available": False,
+            "type": None,
+            "publishers": [],
+            "subscribers": [],
+            "edges": [],
+            "sample": "",
+        },
     }
 
 
@@ -663,6 +793,7 @@ def probe_scout_capabilities(
             "ros_environment": {},
             "devices": {},
             "topics": {},
+            "tf": {},
             "services": {},
             "nodes": [],
             "motion_observation": None,
@@ -774,6 +905,8 @@ def probe_scout_capabilities(
         device_step_count
         + (selected_topic_count * 3)
         + selected_service_count
+        + (2 if "/tf" in topic_names else 0)
+        + (2 if "/tf_static" in topic_names else 0)
         + 1
         + 1
         + 1
@@ -781,6 +914,8 @@ def probe_scout_capabilities(
     timeout_budget = (
         selected_topic_count * TOPIC_DETAIL_TIMEOUT_BUDGET_SECONDS
         + selected_service_count * SERVICE_TYPE_TIMEOUT_SECONDS
+        + (TOPIC_INFO_TIMEOUT_SECONDS + TF_SAMPLE_TIMEOUT_SECONDS if "/tf" in topic_names else 0)
+        + (TOPIC_INFO_TIMEOUT_SECONDS + TF_SAMPLE_TIMEOUT_SECONDS if "/tf_static" in topic_names else 0)
     )
     if motion_observation_will_run:
         timeout_budget += _observe_motion_timeout(observe_motion_seconds)
@@ -815,6 +950,8 @@ def probe_scout_capabilities(
             progress=progress_tracker,
             topic_key=topic_key,
         )
+
+    payload["observed"]["tf"] = _tf_details(executor, topic_names, progress=progress_tracker)
 
     for service_key in SERVICE_CANDIDATES:
         selected_service = selected_services[service_key]

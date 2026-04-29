@@ -14,6 +14,13 @@
   <arg name="planner_cmd_vel" default="/scout/cmd_vel_planner"/>
   <arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>
 
+  <param name="robot_description" textfile="$(find auto-scout)/urdf/scout.urdf" />
+
+  <!-- Publish fixed Scout frame transforms needed by AMCL, costmaps, and laser processing. -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+    <param name="publish_frequency" value="30.0"/>
+  </node>
+
   <node name="map_file_guard" pkg="auto-scout" type="map_file_guard.py" output="screen" required="true">
     <param name="map_file" value="$(arg map_file)"/>
   </node>

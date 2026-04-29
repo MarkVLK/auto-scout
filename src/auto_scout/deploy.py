@@ -1,5 +1,6 @@
 """Deployment routines for the clean-slate Scout and companion runtimes."""
 
+from copy import deepcopy
 import os
 import tempfile
 
@@ -63,6 +64,7 @@ Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
 Environment=ROS_MASTER_URI={ros_master_uri}
 Environment=ROS_HOSTNAME={advertise_host}
 Environment=ROS_LOG_DIR={ros_log_dir}
+Environment=ROS_OS_OVERRIDE=debian:stretch
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5
@@ -190,10 +192,20 @@ def _copy_service_to_remote(runner, ssh_config, service_name, content):
     return remote_temp
 
 
-def _copy_site_inventory_to_remote(runner, ssh_config, workspace_dir, site_config):
+def _site_inventory_for_remote_role(site_config, role):
+    payload = deepcopy(site_config)
+    if role == "scout":
+        companion = payload.get("roles", {}).get("companion", {})
+        companion.setdefault("capabilities", {})["notify"] = False
+        companion.setdefault("notifications", {})["webhook_url"] = ""
+    return payload
+
+
+def _copy_site_inventory_to_remote(runner, ssh_config, workspace_dir, site_config, role=None):
     remote_path = remote_site_config_path(workspace_dir)
+    payload = _site_inventory_for_remote_role(site_config, role)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        handle.write(dump_yaml(site_config))
+        handle.write(dump_yaml(payload))
         local_path = handle.name
 
     try:
@@ -268,7 +280,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         excludes=SYNC_EXCLUDES,
     )
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
-    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config)
+    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config, role="scout")
 
     remote_temp = _copy_service_to_remote(runner, target_root, service_name, service_text)
     for command in _install_service_commands(service_name, remote_temp):
@@ -320,7 +332,7 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         excludes=SYNC_EXCLUDES,
     )
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
-    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config)
+    _copy_site_inventory_to_remote(runner, target_root, workspace_dir, site_config, role="companion")
 
     remote_temp = _copy_service_to_remote(
         runner,

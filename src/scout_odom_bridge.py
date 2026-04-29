@@ -16,16 +16,15 @@ class ScoutOdomBridge:
     def __init__(self, config_path=None, site_path=None):
         try:
             import rospy
-            from geometry_msgs.msg import TransformStamped
             from nav_msgs.msg import Odometry
-            from tf2_ros import TransformBroadcaster
         except ImportError as exc:
             raise SystemExit("Scout odom bridge requires ROS Python packages: {}".format(exc))
 
         self.rospy = rospy
         self.Odometry = Odometry
-        self.TransformStamped = TransformStamped
-        self.TransformBroadcaster = TransformBroadcaster
+        self.TransformStamped = None
+        self.TFMessage = None
+        self.tf_publisher = None
         rospy.init_node("scout_odom_bridge", anonymous=False)
         self.config, self.config_path = load_scout_config(config_path)
         self.site_config, self.site_path = load_site_config(site_path)
@@ -41,8 +40,32 @@ class ScoutOdomBridge:
         self.output_child_frame = rospy.get_param("~child_frame_id", "base_link")
 
         self.publisher = rospy.Publisher(self.output_topic, Odometry, queue_size=10)
-        self.tf_broadcaster = TransformBroadcaster()
+        self._setup_tf_publisher()
         self.subscriber = rospy.Subscriber(self.source_topic, Odometry, self.callback, queue_size=10)
+
+    def _setup_tf_publisher(self):
+        try:
+            from geometry_msgs.msg import TransformStamped
+            from tf2_msgs.msg import TFMessage
+        except Exception as exc:
+            self.rospy.logwarn(
+                "Scout odom bridge running without TF publishing; /odom remains active: %s",
+                exc,
+            )
+            return
+
+        try:
+            self.TransformStamped = TransformStamped
+            self.TFMessage = TFMessage
+            self.tf_publisher = self.rospy.Publisher("/tf", TFMessage, queue_size=10)
+        except Exception as exc:
+            self.TransformStamped = None
+            self.TFMessage = None
+            self.tf_publisher = None
+            self.rospy.logwarn(
+                "Scout odom bridge could not create /tf publisher; /odom remains active: %s",
+                exc,
+            )
 
     def _normalize_twist(self, twist):
         if self.forward_axis == "x":
@@ -50,6 +73,9 @@ class ScoutOdomBridge:
         body_twist = twist.twist if hasattr(twist, "twist") else twist
         body_twist.linear.x, body_twist.linear.y = body_twist.linear.y, body_twist.linear.x
         return twist
+
+    def tf_available(self):
+        return bool(self.tf_publisher and self.TransformStamped and self.TFMessage)
 
     def callback(self, msg):
         odom = self.Odometry()
@@ -60,6 +86,9 @@ class ScoutOdomBridge:
         odom.twist = self._normalize_twist(msg.twist)
         self.publisher.publish(odom)
 
+        if not self.tf_available():
+            return
+
         transform = self.TransformStamped()
         transform.header.stamp = odom.header.stamp
         transform.header.frame_id = self.output_frame
@@ -68,13 +97,16 @@ class ScoutOdomBridge:
         transform.transform.translation.y = odom.pose.pose.position.y
         transform.transform.translation.z = odom.pose.pose.position.z
         transform.transform.rotation = odom.pose.pose.orientation
-        self.tf_broadcaster.sendTransform(transform)
+        tf_message = self.TFMessage()
+        tf_message.transforms = [transform]
+        self.tf_publisher.publish(tf_message)
 
     def run(self):
         self.rospy.loginfo(
-            "Scout odom bridge active: %s -> %s",
+            "Scout odom bridge active: %s -> %s (tf=%s)",
             self.source_topic,
             self.output_topic,
+            "enabled" if self.tf_available() else "degraded",
         )
         self.rospy.spin()
 

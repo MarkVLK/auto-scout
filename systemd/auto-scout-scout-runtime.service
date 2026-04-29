@@ -15,6 +15,7 @@ Environment=AUTO_SCOUT_SITE_CONFIG=/userdata/catkin_ws/src/auto-scout/config/sit
 Environment=ROS_MASTER_URI=http://scout-host-or-ip.invalid:11311
 Environment=ROS_HOSTNAME=scout-host-or-ip.invalid
 Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs
+Environment=ROS_OS_OVERRIDE=debian:stretch
 ExecStart=/bin/bash -lc '/userdata/catkin_ws/src/auto-scout/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5

@@ -20,6 +20,7 @@ source_runtime_setup() {
 }
 
 export ROS_DISTRO="${ROS_DISTRO:-melodic}"
+export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"
 source_runtime_setup /opt/ros/melodic/setup.bash
 export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 if [ -f "${CATKIN_SETUP}" ]; then

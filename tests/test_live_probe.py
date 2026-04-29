@@ -45,6 +45,8 @@ class FakeRunner:
                     "/scout/cmd_vel_planner\n"
                     "/scout/cmd_vel_companion\n"
                     "/scout/safety_state\n"
+                    "/tf_static\n"
+                    "/tf\n"
                     "/SensorNode/simple_battery_status\n"
                     "/scout/battery_guard_state\n"
                     "/CoreNode/going_home_status\n"
@@ -96,6 +98,14 @@ class FakeRunner:
             "rostopic info /scout/safety_state": FakeCommandResult(stdout="Type: std_msgs/String\nPublishers:\n * /scout_safety_filter\nSubscribers:\n"),
             "rostopic hz -w 5 /scout/safety_state": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
             "rostopic echo -n 1 /scout/safety_state": FakeCommandResult(stdout='data: "{\\"state\\": \\"clear\\"}"\n'),
+            "rostopic info /tf_static": FakeCommandResult(stdout="Type: tf2_msgs/TFMessage\nPublishers:\n * /robot_state_publisher\nSubscribers:\n"),
+            "rostopic echo /tf_static": FakeCommandResult(
+                stdout='transforms:\n  -\n    header:\n      frame_id: "base_link"\n    child_frame_id: "base_laser"\n',
+            ),
+            "rostopic info /tf": FakeCommandResult(stdout="Type: tf2_msgs/TFMessage\nPublishers:\n * /scout_odom_bridge\nSubscribers:\n"),
+            "rostopic echo /tf": FakeCommandResult(
+                stdout='transforms:\n  -\n    header:\n      frame_id: "odom"\n    child_frame_id: "base_link"\n',
+            ),
             "rostopic info /SensorNode/simple_battery_status": FakeCommandResult(stdout="Type: roller_eye/status\nPublishers:\n * /SensorNode\nSubscribers:\n * /scout_battery_dock_guard\n"),
             "rostopic hz -w 5 /SensorNode/simple_battery_status": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
             "rostopic echo -n 1 /SensorNode/simple_battery_status": FakeCommandResult(stdout="status: [0, 82, 0]\n"),
@@ -149,6 +159,8 @@ class LiveProbeTest(unittest.TestCase):
         self.assertTrue(result["inferred_capabilities"]["imu"])
         self.assertTrue(result["inferred_capabilities"]["pose"])
         self.assertTrue(result["inferred_capabilities"]["motion"])
+        self.assertTrue(result["observed"]["tf"]["ok"])
+        self.assertEqual(result["observed"]["tf"]["missing_edges"], [])
         self.assertEqual(result["config_mismatch_suggestions"], [])
         self.assertEqual(
             result["observed"]["services"]["vendor_low_battery_dock"]["details"]["type"],
@@ -186,6 +198,35 @@ class LiveProbeTest(unittest.TestCase):
         suggestions = {item["path"]: item["suggested"] for item in result["config_mismatch_suggestions"]}
         self.assertEqual(suggestions["roles.scout.devices.lidar"], "/dev/ttyS4")
         self.assertEqual(suggestions["roles.scout.topics.odom"], "/MotorNode/vio_odom_relative")
+
+    def test_probe_reports_missing_tf_separately_from_odom(self):
+        site_config = default_site_config()
+        runner = FakeRunner(
+            overrides={
+                "rostopic list": FakeCommandResult(
+                    stdout="/scan\n/camera/image_raw/compressed\n/MotorNode/baselink_odom_relative\n/cmd_vel_force\n",
+                ),
+            }
+        )
+
+        result = probe_scout_capabilities(
+            site_config,
+            observe_motion_seconds=0,
+            exercise_cmd_vel=False,
+            runner=runner,
+            force_remote=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["observed"]["topics"]["odom"]["selected"], "/MotorNode/baselink_odom_relative")
+        self.assertFalse(result["observed"]["tf"]["ok"])
+        self.assertEqual(
+            result["observed"]["tf"]["missing_edges"],
+            [
+                {"parent": "base_link", "child": "base_laser"},
+                {"parent": "odom", "child": "base_link"},
+            ],
+        )
 
     def test_probe_progress_reports_ordered_work_and_skipped_motion_observation(self):
         site_config = default_site_config()

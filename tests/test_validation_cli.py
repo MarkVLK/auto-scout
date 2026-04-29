@@ -27,9 +27,12 @@ from auto_scout.deploy import _render_companion_service
 from auto_scout.deploy import _render_ros_log_cleanup_service
 from auto_scout.deploy import _render_ros_log_cleanup_timer
 from auto_scout.deploy import _render_scout_service
+from auto_scout.deploy import _copy_site_inventory_to_remote
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
 from auto_scout.mission_runner import _build_smoke_loop_remote_command
+from auto_scout.redaction import REDACTED_VALUE
+from auto_scout.redaction import redact_sensitive
 from auto_scout.site_config import default_site_config
 from auto_scout.yaml_loader import load_yaml
 from auto_scout.yaml_loader import write_yaml
@@ -177,6 +180,69 @@ class ValidationCliTest(unittest.TestCase):
             "https://notify.example.test/auto-scout",
         )
 
+    def test_cli_configure_redacts_webhook_from_stdout_and_artifact(self):
+        artifact_runs = []
+
+        class FakeArtifactRun:
+            def __init__(self, name):
+                self.name = name
+                self.json = {}
+                artifact_runs.append(self)
+
+            def write_json(self, name, payload):
+                self.json[name] = payload
+
+            def write_text(self, name, content):
+                pass
+
+            def log(self, message):
+                pass
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            stdout = io.StringIO()
+            secret = "https://notify.example.test/auto-scout"
+            with patch.object(cli, "ArtifactRun", FakeArtifactRun):
+                with redirect_stdout(stdout):
+                    return_code = cli.main(
+                        [
+                            "--site",
+                            str(site_path),
+                            "configure",
+                            "companion",
+                            "--non-interactive",
+                            "--skip-connectivity-check",
+                            "--enable-notify",
+                            "--notify-webhook-url",
+                            secret,
+                        ]
+                    )
+            payload = json.loads(stdout.getvalue())
+            site_config = load_yaml(site_path)
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(site_config["roles"]["companion"]["notifications"]["webhook_url"], secret)
+        self.assertEqual(payload["settings"]["notifications"]["webhook_url"], REDACTED_VALUE)
+        self.assertEqual(
+            artifact_runs[0].json["configure-report.json"]["settings"]["notifications"]["webhook_url"],
+            REDACTED_VALUE,
+        )
+        self.assertNotIn(secret, stdout.getvalue())
+
+    def test_redaction_removes_webhook_urls_from_error_strings(self):
+        payload = {
+            "error": (
+                "HTTPSConnectionPool(host='hooks.slack.com', port=443): "
+                "Max retries exceeded with url: /services/T000/B000/SECRET"
+            ),
+            "full_url": "https://hooks.slack.com/services/T000/B000/SECRET",
+        }
+
+        redacted = redact_sensitive(payload)
+
+        self.assertNotIn("SECRET", str(redacted))
+        self.assertEqual(redacted["full_url"], REDACTED_VALUE)
+
     def test_cli_configure_scout_non_interactive_writes_drive_model(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             site_path = Path(temp_dir) / "site.yaml"
@@ -298,6 +364,66 @@ class ValidationCliTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(observed_progress_callbacks, [None])
+
+    def test_cli_notify_test_posts_slack_payload(self):
+        artifact_runs = []
+
+        class FakeArtifactRun:
+            def __init__(self, name):
+                self.name = name
+                self.json = {}
+                artifact_runs.append(self)
+
+            def write_json(self, name, payload):
+                self.json[name] = payload
+
+            def write_text(self, name, content):
+                pass
+
+            def log(self, message):
+                pass
+
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            site_config = default_site_config()
+            site_config["roles"]["companion"]["capabilities"]["notify"] = True
+            site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+            write_yaml(site_path, site_config)
+            posts = []
+            stdout = io.StringIO()
+
+            def fake_post(url, payload, timeout=None):
+                posts.append({"url": url, "json": payload, "timeout": timeout})
+                return FakeResponse()
+
+            with patch.object(cli, "ArtifactRun", FakeArtifactRun):
+                with patch.object(cli, "_post_json", side_effect=fake_post):
+                    with redirect_stdout(stdout):
+                        return_code = cli.main(
+                            [
+                                "--site",
+                                str(site_path),
+                                "notify",
+                                "test",
+                                "--message",
+                                "Auto-Scout test from unit tests",
+                            ]
+                        )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(return_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(posts[0]["url"], "https://notify.example.test/auto-scout")
+        self.assertEqual(posts[0]["json"]["text"], "Auto-Scout test from unit tests")
+        self.assertIn("blocks", posts[0]["json"])
+        self.assertNotIn("https://notify.example.test/auto-scout", stdout.getvalue())
+        self.assertTrue(artifact_runs[0].json["notify-test-report.json"]["sent"])
 
     def test_cli_configure_companion_prompt_accepts_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -501,6 +627,56 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(payload["service"], "auto-scout-scout-runtime.service")
         self.assertEqual(payload["ros_log_dir"], "/userdata/auto-scout/ros-logs")
 
+    def test_scout_deploy_site_inventory_omits_companion_webhook_secret(self):
+        class FakeRunner:
+            def __init__(self):
+                self.payload = None
+
+            def copy_to_remote(self, ssh_config, local_path, remote_path):
+                self.payload = load_yaml(local_path)
+
+        site_config = default_site_config()
+        site_config["roles"]["companion"]["capabilities"]["notify"] = True
+        site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+        runner = FakeRunner()
+
+        _copy_site_inventory_to_remote(
+            runner,
+            site_config["roles"]["scout"]["ssh"],
+            site_config["roles"]["scout"]["workspace_dir"],
+            site_config,
+            role="scout",
+        )
+
+        companion = runner.payload["roles"]["companion"]
+        self.assertFalse(companion["capabilities"]["notify"])
+        self.assertEqual(companion["notifications"]["webhook_url"], "")
+
+    def test_companion_deploy_site_inventory_keeps_companion_webhook_secret(self):
+        class FakeRunner:
+            def __init__(self):
+                self.payload = None
+
+            def copy_to_remote(self, ssh_config, local_path, remote_path):
+                self.payload = load_yaml(local_path)
+
+        site_config = default_site_config()
+        site_config["roles"]["companion"]["capabilities"]["notify"] = True
+        site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+        runner = FakeRunner()
+
+        _copy_site_inventory_to_remote(
+            runner,
+            site_config["roles"]["companion"]["ssh"],
+            site_config["roles"]["companion"]["workspace_dir"],
+            site_config,
+            role="companion",
+        )
+
+        companion = runner.payload["roles"]["companion"]
+        self.assertTrue(companion["capabilities"]["notify"])
+        self.assertEqual(companion["notifications"]["webhook_url"], "https://notify.example.test/auto-scout")
+
     def test_rendered_services_use_saved_ros_endpoints(self):
         site_config = default_site_config()
         site_config["roles"]["scout"]["ros"]["master_uri"] = "http://moorebot-scout.local:11311"
@@ -515,6 +691,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("Environment=ROS_MASTER_URI=http://moorebot-scout.local:11311", scout_service)
         self.assertIn("Environment=ROS_HOSTNAME=moorebot-scout.local", scout_service)
         self.assertIn("Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs", scout_service)
+        self.assertIn("Environment=ROS_OS_OVERRIDE=debian:stretch", scout_service)
         self.assertIn(
             "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
                 site_config["roles"]["scout"]["workspace_dir"]
@@ -579,6 +756,7 @@ class ValidationCliTest(unittest.TestCase):
     def test_companion_startup_contract_uses_mapping_default_and_explicit_ros_env(self):
         compose_text = (REPO_ROOT / "container" / "docker-compose.yml").read_text(encoding="utf-8")
         start_script = (REPO_ROOT / "scripts" / "start_companion_stack.sh").read_text(encoding="utf-8")
+        scout_start_script = (REPO_ROOT / "scripts" / "start_scout_runtime.sh").read_text(encoding="utf-8")
         known_hosts_script = (REPO_ROOT / "scripts" / "provision_pi_known_hosts.sh").read_text(encoding="utf-8")
         companion_launch = (REPO_ROOT / "launch" / "companion_runtime.launch").read_text(encoding="utf-8")
         navigation_launch = (REPO_ROOT / "launch" / "navigation.launch").read_text(encoding="utf-8")
@@ -597,6 +775,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn('AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"', start_script)
         self.assertIn('AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"', start_script)
         self.assertIn("export AUTO_SCOUT_ROS_LOG_DIR", start_script)
+        self.assertIn('export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"', scout_start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
         self.assertNotIn("moorebot-scout.local", start_script)
@@ -605,6 +784,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn('name="battery_map_return_controller"', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)
         self.assertIn('<arg name="planner_cmd_vel" default="/scout/cmd_vel_planner"/>', navigation_launch)
+        self.assertIn('name="robot_state_publisher"', navigation_launch)
         self.assertIn('<remap from="cmd_vel" to="$(arg planner_cmd_vel)"/>', navigation_launch)
         self.assertIn('<param name="odom_alpha5" value="0.2"/>', navigation_launch)
         self.assertIn("AUTO_SCOUT_ROS_MASTER_URI=http://<scout-host-or-ip>:11311", env_example)

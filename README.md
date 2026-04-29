@@ -106,7 +106,7 @@ Low battery is handled by a hybrid guard:
 - If the companion cannot claim, is too slow, or fails, Scout falls back directly to the vendor `/nav_low_bat` routine.
 - The final physical docking step is always vendor docking, monitored through `/CoreNode/going_home_status`.
 
-`scout_safety_filter.py` blocks normal planner commands while the guard is in `return_required`, `vendor_docking`, or `failed`. A docked `charging` state is allowed to leave the dock when battery is at or above `safety.mission_start_min_battery_level`; below that threshold, the mission is refused and the operator is notified with the current battery percent when a webhook is configured. The filter publishes at most one stop for an active planner episode, then stays quiet unless fresh planner commands resume. It allows planner commands during `map_return` so the companion can drive to the mapped dock approach waypoint.
+`scout_safety_filter.py` blocks normal planner commands while the guard is in `return_required`, `vendor_docking`, or `failed`. A docked `charging` state is allowed to leave the dock when battery is at or above `safety.mission_start_min_battery_level`; below that threshold, the mission is refused and the operator is notified with the current battery percent when the companion Slack incoming webhook is configured. The filter publishes at most one stop for an active planner episode, then stays quiet unless fresh planner commands resume. It allows planner commands during `map_return` so the companion can drive to the mapped dock approach waypoint.
 
 ## Mission Goals
 
@@ -133,7 +133,7 @@ Feasible path:
 - Run `amcl` + `move_base` on the companion.
 - Let `move_base` command `/scout/cmd_vel_planner`; the Scout-side safety filter publishes filtered `/scout/cmd_vel_companion` only while fresh planner commands are active.
 - Capture stills or short clips at each patrol goal.
-- Persist media to the companion first, then optionally fan out to webhooks or cloud storage.
+- Persist media to the companion first, then optionally fan out to the configured Slack app webhook or cloud storage.
 
 ### 3. Dog Search
 

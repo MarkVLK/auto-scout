@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from auto_scout.paths import DEFAULT_ARTIFACT_ROOT
+from auto_scout.redaction import redact_sensitive
 
 
 def _slug(value):
@@ -38,7 +39,7 @@ class ArtifactRun:
         target = self.path / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
+            json.dump(redact_sensitive(payload), handle, indent=2, sort_keys=True)
             handle.write("\n")
         return target
 

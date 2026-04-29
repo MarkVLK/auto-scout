@@ -26,11 +26,21 @@ from companion_runtime_support import role_config
 from companion_runtime_support import scout_runtime_topic
 from companion_runtime_support import system_capabilities
 from companion_runtime_support import utc_timestamp
+from auto_scout.notifications import build_mission_success_payload
+from auto_scout.notifications import build_preflight_refusal_payload
+from auto_scout.notifications import companion_notification_webhook_url
+from auto_scout.redaction import redact_sensitive
 from config_utils import load_scout_config
 
 
 DEFAULT_MISSION_START_MIN_BATTERY_LEVEL = 50.0
 BATTERY_TOO_LOW_REASON = "battery_too_low_to_leave_dock"
+NAVIGATION_SCAN_UNAVAILABLE_REASON = "navigation_scan_unavailable"
+NAVIGATION_TF_UNAVAILABLE_REASON = "navigation_tf_unavailable"
+REQUIRED_NAVIGATION_TF_EDGES = [
+    ("odom", "base_link"),
+    ("base_link", "base_laser"),
+]
 
 
 def _finite_number(value):
@@ -72,6 +82,24 @@ def evaluate_dock_departure_gate(battery_guard_state, mission_start_min_battery_
     return result
 
 
+def normalize_frame_id(frame_id):
+    return str(frame_id or "").strip().lstrip("/")
+
+
+def tf_edges_from_message(msg):
+    edges = []
+    for transform in getattr(msg, "transforms", []) or []:
+        parent = normalize_frame_id(getattr(getattr(transform, "header", None), "frame_id", ""))
+        child = normalize_frame_id(getattr(transform, "child_frame_id", ""))
+        if parent and child:
+            edges.append((parent, child))
+    return edges
+
+
+def format_tf_edges(edges):
+    return [{"parent": parent, "child": child} for parent, child in sorted(edges)]
+
+
 class MissionRunError(RuntimeError):
     """Raised when the smoke mission cannot complete safely."""
 
@@ -87,10 +115,14 @@ class CompanionMissionController(object):
             from geometry_msgs.msg import PoseWithCovarianceStamped
             from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
             from nav_msgs.msg import Odometry
-            from sensor_msgs.msg import CompressedImage
+            from sensor_msgs.msg import CompressedImage, LaserScan
             from std_msgs.msg import String
         except ImportError as exc:
             raise MissionRunError("ROS mission controller requires ROS Python packages: {}".format(exc))
+        try:
+            from tf2_msgs.msg import TFMessage
+        except ImportError:
+            TFMessage = None
 
         self.actionlib = actionlib
         self.rospy = rospy
@@ -98,6 +130,7 @@ class CompanionMissionController(object):
         self.MoveBaseAction = MoveBaseAction
         self.MoveBaseGoal = MoveBaseGoal
         self.String = String
+        self.TFMessage = TFMessage
 
         self.config, self.config_path = load_scout_config(config_path)
         self.site_config, self.site_path = load_site_config(site_path)
@@ -112,6 +145,8 @@ class CompanionMissionController(object):
         self.latest_pose = None
         self.pose_seen = False
         self.latest_battery_guard_state = None
+        self.scan_seen = False
+        self.tf_edges = set()
 
         rospy.init_node("scout_navigation_controller", anonymous=False)
         self.status_pub = rospy.Publisher("/scout/mission_status", String, queue_size=1)
@@ -122,6 +157,12 @@ class CompanionMissionController(object):
             self.camera_callback,
             queue_size=1,
         )
+        rospy.Subscriber(
+            scout_runtime_topic(self.site_config, self.config, "lidar_scan", "/scan"),
+            LaserScan,
+            self.scan_callback,
+            queue_size=1,
+        )
         rospy.Subscriber("/amcl_pose", PoseWithCovarianceStamped, self.pose_callback, queue_size=1)
         rospy.Subscriber("/odom", Odometry, self.odom_callback, queue_size=1)
         rospy.Subscriber(
@@ -130,6 +171,11 @@ class CompanionMissionController(object):
             self.battery_guard_callback,
             queue_size=1,
         )
+        if TFMessage is not None:
+            rospy.Subscriber("/tf", TFMessage, self.tf_callback, queue_size=10)
+            rospy.Subscriber("/tf_static", TFMessage, self.tf_callback, queue_size=10)
+        else:
+            rospy.logwarn("tf2_msgs is unavailable; mapped mission preflight will block until TF support is installed")
         self.move_base_client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
 
     def log(self, message):
@@ -142,15 +188,22 @@ class CompanionMissionController(object):
     def write_json(self, name, payload):
         target = os.path.join(self.artifact_dir, name)
         with open(target, "w") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
+            json.dump(redact_sensitive(payload), handle, indent=2, sort_keys=True)
             handle.write("\n")
         return target
 
     def publish_status_payload(self, payload):
-        self.status_pub.publish(json.dumps(payload, sort_keys=True))
+        self.status_pub.publish(json.dumps(redact_sensitive(payload), sort_keys=True))
 
     def camera_callback(self, msg):
         self.latest_image = msg
+
+    def scan_callback(self, msg):
+        self.scan_seen = True
+
+    def tf_callback(self, msg):
+        for edge in tf_edges_from_message(msg):
+            self.tf_edges.add(edge)
 
     def battery_guard_callback(self, msg):
         try:
@@ -207,7 +260,45 @@ class CompanionMissionController(object):
 
     def evaluate_mission_start_preflight(self):
         state = self.wait_for_battery_guard_state()
-        return evaluate_dock_departure_gate(state, self.mission_start_min_battery_level())
+        battery_gate = evaluate_dock_departure_gate(state, self.mission_start_min_battery_level())
+        if not battery_gate["ok"]:
+            return battery_gate
+        navigation_gate = self.evaluate_navigation_preflight()
+        if not navigation_gate["ok"]:
+            return navigation_gate
+        battery_gate["navigation"] = navigation_gate
+        return battery_gate
+
+    def navigation_input_state(self):
+        required_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
+        missing_edges = required_edges.difference(self.tf_edges)
+        result = {
+            "ok": True,
+            "reason": "navigation_inputs_available",
+            "scan_seen": self.scan_seen,
+            "tf_edges": format_tf_edges(self.tf_edges),
+            "required_tf_edges": format_tf_edges(required_edges),
+            "missing_tf_edges": format_tf_edges(missing_edges),
+        }
+        if not self.scan_seen:
+            result["ok"] = False
+            result["reason"] = NAVIGATION_SCAN_UNAVAILABLE_REASON
+            return result
+        if self.TFMessage is None or missing_edges:
+            result["ok"] = False
+            result["reason"] = NAVIGATION_TF_UNAVAILABLE_REASON
+            return result
+        return result
+
+    def evaluate_navigation_preflight(self, timeout_seconds=5.0):
+        start = self.rospy.Time.now()
+        while not self.rospy.is_shutdown():
+            state = self.navigation_input_state()
+            if state["ok"]:
+                return state
+            if (self.rospy.Time.now() - start).to_sec() >= timeout_seconds:
+                return state
+            self.rospy.sleep(0.25)
 
     def navigate_to_waypoint(self, waypoint_name):
         waypoints = self.config.get("waypoints", {})
@@ -269,47 +360,39 @@ class CompanionMissionController(object):
         if not notification.get("enabled", False):
             return {"sent": False, "reason": "disabled"}
 
-        webhook_url = (
-            self.site_config["roles"]["companion"].get("notifications", {}).get("webhook_url")
-            or self.config.get("storage", {}).get("webhook_url", "")
-        )
+        webhook_url = self.notification_webhook_url()
         if not webhook_url:
             raise MissionRunError("Notification is enabled but no webhook URL is configured")
         if not REQUESTS_AVAILABLE:
             raise MissionRunError("Notification requires the requests package")
 
-        payload = {
-            "mission": self.mission.get("name", "smoke_loop"),
-            "result": "pass",
-            "artifact_dir": self.artifact_dir,
-            "photo_path": photo_path,
-            "return": return_result,
-            "timestamp": utc_timestamp(),
-        }
+        payload = build_mission_success_payload(
+            self.mission.get("name", "smoke_loop"),
+            self.artifact_dir,
+            photo_path,
+            return_result,
+            utc_timestamp(),
+        )
         response = requests.post(webhook_url, json=payload, timeout=15)
         response.raise_for_status()
-        self.log("Sent webhook notification to {}".format(webhook_url))
+        self.log("Sent Slack mission notification")
         return {"sent": True, "status_code": response.status_code}
 
     def notification_webhook_url(self):
-        return (
-            self.site_config["roles"]["companion"].get("notifications", {}).get("webhook_url")
-            or self.config.get("storage", {}).get("webhook_url", "")
-        )
+        return companion_notification_webhook_url(self.site_config)
 
     def send_preflight_notification(self, result):
         webhook_url = self.notification_webhook_url()
         if not webhook_url:
             return {"sent": False, "reason": "webhook_url_empty"}
 
-        payload = dict(result)
-        payload["timestamp"] = utc_timestamp()
+        payload = build_preflight_refusal_payload(result)
         try:
             response = requests.post(webhook_url, json=payload, timeout=15)
             response.raise_for_status()
         except Exception as exc:
-            return {"sent": False, "reason": "webhook_error", "error": str(exc)}
-        self.log("Sent preflight notification to {}".format(webhook_url))
+            return {"sent": False, "reason": "webhook_error", "error": redact_sensitive(str(exc))}
+        self.log("Sent Slack preflight notification")
         return {"sent": True, "status_code": response.status_code}
 
     def refuse_mission_start(self, gate):
@@ -317,21 +400,23 @@ class CompanionMissionController(object):
             "ok": False,
             "phase": "preflight",
             "mission": self.mission.get("name", "smoke_loop"),
-            "reason": gate["reason"],
-            "battery_percent": gate["battery_percent"],
-            "charging": gate["charging"],
-            "battery_guard_mode": gate["battery_guard_mode"],
-            "mission_start_min_battery_level": gate["mission_start_min_battery_level"],
-            "battery_guard_state": gate["battery_guard_state"],
+            "reason": gate.get("reason", "preflight_failed"),
             "artifact_dir": self.artifact_dir,
             "timestamp": utc_timestamp(),
         }
-        self.log(
-            "Mission blocked: battery {:.1f}% is below mission start threshold {:.1f}%".format(
-                gate["battery_percent"],
-                gate["mission_start_min_battery_level"],
+        for key, value in gate.items():
+            if key not in ["ok", "reason"]:
+                result[key] = value
+
+        if result["reason"] == BATTERY_TOO_LOW_REASON:
+            self.log(
+                "Mission blocked: battery {:.1f}% is below mission start threshold {:.1f}%".format(
+                    result["battery_percent"],
+                    result["mission_start_min_battery_level"],
+                )
             )
-        )
+        else:
+            self.log("Mission blocked: {}".format(result["reason"]))
         result["notification"] = self.send_preflight_notification(result)
         self.write_json("mission-result.json", result)
         self.publish_status_payload(result)
@@ -393,7 +478,7 @@ def main(argv=None):
         artifact_dir=args.artifact_dir,
     )
     result = controller.run_smoke_loop()
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(redact_sensitive(result), indent=2, sort_keys=True))
     return 0
 
 

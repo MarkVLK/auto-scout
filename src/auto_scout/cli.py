@@ -6,6 +6,13 @@ import os
 import subprocess
 import sys
 import threading
+import json as _json
+import urllib.request
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from auto_scout.artifacts import ArtifactRun
 from auto_scout.command_runner import CommandRunner
@@ -17,7 +24,11 @@ from auto_scout.mission_runner import run_smoke_loop
 from auto_scout.network_validation import role_needs_network_prompt
 from auto_scout.network_validation import validate_site_connectivity
 from auto_scout.paths import DEFAULT_SCOUT_CONFIG, repo_root
+from auto_scout.redaction import redact_sensitive
 from auto_scout.site_config import load_site_config, role_config, write_site_config
+from auto_scout.notifications import build_test_notification_payload
+from auto_scout.notifications import companion_notification_webhook_url
+from auto_scout.notifications import DEFAULT_TEST_MESSAGE
 
 
 def _validator_command(
@@ -288,8 +299,34 @@ def _write_site_if_requested(site_config, site_path, should_write):
 
 
 def _emit_json(payload, artifact_run, filename):
-    artifact_run.write_json(filename, payload)
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    redacted_payload = redact_sensitive(payload)
+    artifact_run.write_json(filename, redacted_payload)
+    print(json.dumps(redacted_payload, indent=2, sort_keys=True))
+
+
+class _UrllibResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        return None
+
+
+def _post_json(url, payload, timeout=15):
+    if requests is not None:
+        response = requests.post(url, json=payload, timeout=timeout)
+        response.raise_for_status()
+        return response
+
+    data = _json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return _UrllibResponse(response.status)
 
 
 def build_parser():
@@ -361,6 +398,15 @@ def build_parser():
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--skip-connectivity-check", action="store_true", help="Skip remote connectivity validation")
 
+    notify_parser = subparsers.add_parser("notify", help="Send or test operator notifications")
+    notify_subparsers = notify_parser.add_subparsers(dest="notify_command", required=True)
+    notify_test_parser = notify_subparsers.add_parser("test", help="Send a Slack incoming-webhook test message")
+    notify_test_parser.add_argument(
+        "--message",
+        default=DEFAULT_TEST_MESSAGE,
+        help="Message text for the Slack test notification",
+    )
+
     return parser
 
 
@@ -370,7 +416,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     site_config, site_path = load_site_config(args.site)
 
-    artifact_name = "{}-{}".format(args.command, getattr(args, "role", getattr(args, "mission", "run")))
+    artifact_subject = (
+        getattr(args, "role", None)
+        or getattr(args, "mission", None)
+        or getattr(args, "notify_command", None)
+        or "run"
+    )
+    artifact_name = "{}-{}".format(args.command, artifact_subject)
     artifact_run = ArtifactRun(artifact_name)
 
     if args.command == "configure":
@@ -507,6 +559,52 @@ def main(argv=None):
             result["write_site"] = False
         _emit_json(result, artifact_run, "probe-report.json")
         return 0 if result.get("ok", False) else 1
+
+    if args.command == "notify":
+        webhook_url = companion_notification_webhook_url(site_config)
+        companion = role_config(site_config, "companion")
+        if not companion.get("capabilities", {}).get("notify", False):
+            payload = {
+                "ok": False,
+                "phase": "notification_config",
+                "error": "Companion notify capability is disabled",
+                "site_path": site_path,
+            }
+            _emit_json(payload, artifact_run, "notify-test-report.json")
+            return 1
+        if not webhook_url:
+            payload = {
+                "ok": False,
+                "phase": "notification_config",
+                "error": "companion.notifications.webhook_url is empty",
+                "site_path": site_path,
+            }
+            _emit_json(payload, artifact_run, "notify-test-report.json")
+            return 1
+
+        notification_payload = build_test_notification_payload(args.message)
+        try:
+            response = _post_json(webhook_url, notification_payload, timeout=15)
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "phase": "notification_delivery",
+                "error": str(exc),
+                "site_path": site_path,
+            }
+            _emit_json(payload, artifact_run, "notify-test-report.json")
+            return 1
+
+        payload = {
+            "ok": True,
+            "phase": "notification_delivery",
+            "sent": True,
+            "status_code": response.status_code,
+            "site_path": site_path,
+            "message": args.message,
+        }
+        _emit_json(payload, artifact_run, "notify-test-report.json")
+        return 0
 
     mission_name = "smoke_loop" if args.mission == "smoke-loop" else args.mission
     mission_config, mission_path = load_mission_config(args.mission_file or mission_name)

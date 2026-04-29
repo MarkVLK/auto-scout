@@ -16,6 +16,8 @@ if str(SRC_DIR) not in sys.path:
 
 from scout_navigation_controller import BATTERY_TOO_LOW_REASON
 from scout_navigation_controller import CompanionMissionController
+from scout_navigation_controller import NAVIGATION_TF_UNAVAILABLE_REASON
+from scout_navigation_controller import REQUIRED_NAVIGATION_TF_EDGES
 from scout_navigation_controller import evaluate_dock_departure_gate
 
 
@@ -30,9 +32,37 @@ class FakeStatusPublisher:
 class FakeRospy:
     def __init__(self):
         self.logs = []
+        self._shutdown = False
+
+    class Time:
+        @staticmethod
+        def now():
+            return FakeRosTime(0.0)
 
     def loginfo(self, message):
         self.logs.append(message)
+
+    def is_shutdown(self):
+        return self._shutdown
+
+    def sleep(self, seconds):
+        return None
+
+
+class FakeRosTime:
+    def __init__(self, value):
+        self.value = value
+
+    def __sub__(self, other):
+        return FakeRosDuration(self.value - other.value)
+
+
+class FakeRosDuration:
+    def __init__(self, value):
+        self.value = value
+
+    def to_sec(self):
+        return self.value
 
 
 class FakeResponse:
@@ -91,6 +121,9 @@ class MissionStartRefusalTest(unittest.TestCase):
         controller.config = {"storage": {}}
         controller.rospy = FakeRospy()
         controller.status_pub = FakeStatusPublisher()
+        controller.scan_seen = False
+        controller.tf_edges = set()
+        controller.TFMessage = object
         return controller
 
     def test_refusal_writes_status_and_posts_notification(self):
@@ -117,11 +150,105 @@ class MissionStartRefusalTest(unittest.TestCase):
         self.assertAlmostEqual(result["battery_percent"], 49.9)
         self.assertTrue(result["notification"]["sent"])
         self.assertEqual(posts[0]["url"], "https://notify.example.test/auto-scout")
-        self.assertEqual(posts[0]["json"]["reason"], BATTERY_TOO_LOW_REASON)
-        self.assertAlmostEqual(posts[0]["json"]["battery_percent"], 49.9)
+        self.assertIn("text", posts[0]["json"])
+        self.assertIn("Auto-Scout mission blocked", posts[0]["json"]["text"])
+        self.assertIn("blocks", posts[0]["json"])
+        self.assertIn(BATTERY_TOO_LOW_REASON, str(posts[0]["json"]["blocks"]))
+        self.assertIn("49.9%", str(posts[0]["json"]["blocks"]))
+        self.assertNotIn("https://notify.example.test/auto-scout", "\n".join(controller.rospy.logs))
         self.assertEqual(written["reason"], BATTERY_TOO_LOW_REASON)
         status_payload = json.loads(controller.status_pub.messages[-1])
         self.assertEqual(status_payload["reason"], BATTERY_TOO_LOW_REASON)
+
+    def test_navigation_preflight_allows_when_scan_and_required_tf_are_seen(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.scan_seen = True
+            controller.tf_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
+
+            result = controller.evaluate_navigation_preflight()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["reason"], "navigation_inputs_available")
+        self.assertEqual(result["missing_tf_edges"], [])
+
+    def test_navigation_preflight_refuses_missing_tf_before_navigation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.site_config["roles"]["companion"]["notifications"]["webhook_url"] = ""
+            controller.wait_for_battery_guard_state = lambda: {
+                "mode": "charging",
+                "charging": True,
+                "battery_percent": 100.0,
+            }
+            controller.mission_start_min_battery_level = lambda: 50.0
+            controller.scan_seen = True
+            controller.tf_edges = {("odom", "base_link")}
+            controller.evaluate_navigation_preflight = lambda: controller.navigation_input_state()
+            controller.wait_for_pose = lambda: self.fail("wait_for_pose should not run after TF preflight refusal")
+            controller.wait_for_move_base = lambda: self.fail("wait_for_move_base should not run after TF preflight refusal")
+
+            result = controller.run_smoke_loop()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "preflight")
+        self.assertEqual(result["reason"], NAVIGATION_TF_UNAVAILABLE_REASON)
+        self.assertEqual(result["missing_tf_edges"], [{"parent": "base_link", "child": "base_laser"}])
+
+    def test_mission_proceeds_when_navigation_preflight_is_clear(self):
+        navigated = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.wait_for_battery_guard_state = lambda: {
+                "mode": "charging",
+                "charging": True,
+                "battery_percent": 100.0,
+            }
+            controller.mission_start_min_battery_level = lambda: 50.0
+            controller.scan_seen = True
+            controller.tf_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
+            controller.mission = {
+                "name": "smoke_loop",
+                "route": {"loop_waypoints": ["one"]},
+            }
+            controller.wait_for_pose = lambda: None
+            controller.wait_for_move_base = lambda: None
+            controller.navigate_to_waypoint = navigated.append
+            controller.request_return = lambda: {"mode": "vendor_dock_requested"}
+            controller.capture_photo = lambda: "/tmp/photo.jpg"
+            controller.send_notification = lambda photo, return_result: {"sent": False, "reason": "disabled"}
+            controller.latest_pose = {"source": "odom"}
+
+            result = controller.run_smoke_loop()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(navigated, ["one"])
+
+    def test_notification_url_ignores_legacy_storage_webhook(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.site_config["roles"]["companion"]["notifications"]["webhook_url"] = ""
+            controller.config = {"storage": {"webhook_url": "https://notify.example.test/legacy"}}
+
+            self.assertEqual(controller.notification_webhook_url(), "")
+
+    def test_preflight_notification_error_redacts_slack_webhook_path(self):
+        def fake_post(url, json=None, timeout=None):
+            raise RuntimeError("failed with url: /services/T000/B000/SECRET")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            with patch("scout_navigation_controller.requests.post", side_effect=fake_post):
+                result = controller.send_preflight_notification(
+                    {
+                        "mission": "smoke_loop",
+                        "reason": BATTERY_TOO_LOW_REASON,
+                        "timestamp": "2026-04-29T12:00:00Z",
+                    }
+                )
+
+        self.assertFalse(result["sent"])
+        self.assertNotIn("SECRET", result["error"])
 
 
 if __name__ == "__main__":

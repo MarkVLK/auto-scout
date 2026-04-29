@@ -49,8 +49,13 @@ select it from the Pi's `~/.ssh/config` for `moorebot-scout.local` and
 `auto-scout-pi5.local`.
 
 Smoke-loop notifications are intentionally configured only in
-`config/site_local.yaml`. Enable them with a real webhook URL before expecting
+`config/site_local.yaml`. Create a Slack app, enable Incoming Webhooks, add a
+webhook to the target channel, and export the generated URL before expecting
 the smoke-loop gate to pass:
+
+```bash
+export AUTO_SCOUT_NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/..."
+```
 
 ```bash
 ./auto-scout configure companion \
@@ -59,6 +64,13 @@ the smoke-loop gate to pass:
   --enable-notify \
   --notify-webhook-url "$AUTO_SCOUT_NOTIFY_WEBHOOK_URL"
 ```
+
+Use `./auto-scout notify test` to verify Slack delivery before relying on
+mission notifications. Treat Slack webhook URLs as secrets; Slack documents
+that leaked URLs may be revoked. Do not commit them or publish old local
+artifacts that include webhook snapshots. The repo ignores
+`config/site_local.yaml`, `config/secrets.yaml`, and `artifacts/`, but ignored
+files are still your responsibility when sharing logs or archives.
 
 ## What It Validates
 
