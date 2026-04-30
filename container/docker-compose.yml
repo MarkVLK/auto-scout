@@ -20,16 +20,20 @@ services:
       AUTO_SCOUT_CONFIG: /opt/catkin_ws/src/auto-scout/config/scout_config.yaml
       AUTO_SCOUT_SITE_CONFIG: ${AUTO_SCOUT_SITE_CONFIG}
       AUTO_SCOUT_ODOM_MODEL_TYPE: ${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}
+      AUTO_SCOUT_ENABLE_NAV_STACK: ${AUTO_SCOUT_ENABLE_NAV_STACK:-false}
       ROS_LOG_DIR: ${AUTO_SCOUT_ROS_LOG_DIR:-/srv/auto-scout/ros-logs}
       # The supported v1 path treats the companion container as the autonomy
       # boundary. Do not replace this with a ros1_bridge/Jazzy boundary unless
       # the documented architecture is intentionally being changed.
       ROS_MASTER_URI: ${AUTO_SCOUT_ROS_MASTER_URI}
-      ROS_HOSTNAME: ${AUTO_SCOUT_ROS_HOSTNAME}
+      ROS_HOSTNAME: ${AUTO_SCOUT_ROS_HOSTNAME:-}
+      ROS_IP: ${AUTO_SCOUT_ROS_IP:-}
     command:
       - /bin/bash
       - -lc
       - >
+        if [ -z "$${ROS_HOSTNAME:-}" ]; then unset ROS_HOSTNAME; fi &&
+        if [ -z "$${ROS_IP:-}" ]; then unset ROS_IP; fi &&
         source /opt/ros/melodic/setup.bash &&
         cd /opt/catkin_ws &&
         catkin_make &&
@@ -38,3 +42,4 @@ services:
         config_file:=/opt/catkin_ws/src/auto-scout/config/scout_config.yaml
         site_file:=${AUTO_SCOUT_SITE_CONFIG}
         localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}
+        enable_nav_stack:=${AUTO_SCOUT_ENABLE_NAV_STACK:-false}

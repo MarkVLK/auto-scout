@@ -84,6 +84,7 @@ files are still your responsibility when sharing logs or archives.
 - Scout built-in sensor topics, battery guard topics, safety settings, and planner-to-safety-filter command routing
 - hybrid low-battery return defaults, including the Scout-local guard node, companion map-return controller, and configured dock approach waypoint
 - service/container files for the reset deployment model
+- persistent Scout swap setup through `auto-scout-scout-swap-setup.service` and the path-escaped systemd `.swap` unit
 - the companion container contract:
   one host-networked ROS1 companion container with the expected Melodic launch path
 - legacy UI and voice quarantine stubs
@@ -95,8 +96,9 @@ files are still your responsibility when sharing logs or archives.
 - role declarations in the effective site inventory
 - configured hostname resolution, including companion-container lookup of Scout and Pi `.local` names when the container is running
 - companion storage directories and container stack expectations
-- Scout bridge, motion, camera, scan, ToF, and IMU capability declarations
-- Scout LiDAR serial-device presence and whether the configured service user can access it
+- Scout bridge, motion, camera, scan, ToF, and IMU capability declarations, with scan treated as intentionally disabled when `AUTO_SCOUT_ENABLE_LIDAR=false`
+- Scout LiDAR serial-device presence and whether the configured service user can access it when the LD19 runtime is enabled
+- Scout memory pressure via `free -m`, `/proc/swaps`, and recent OOM/SIGKILL log lines during live Scout validation
 - whether live Scout probing matches the declared vendor topics, normalized sensor topics, battery/dock topics, `/nav_low_bat` service type, ROS networking, and capabilities
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
@@ -118,6 +120,8 @@ The most important runtime sanity check after that is live mismatch detection:
 - if the cross-host ROS settings still advertise `localhost`, treat that as a deployment bug rather than a hardware limitation
 
 For the validated rooted Scout path, a common serial-access failure mode is a LiDAR device owned by `root:dialout` while the configured service user is not in `dialout`. `./auto-scout validate scout` now reports that explicitly.
+
+While the LD19 is detached, the expected state is `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false`. In that mode, validation should report LiDAR serial access, mapping, patrol, and smoke-loop autonomy as skipped by policy rather than failed, while still checking odom, TF, ToF/IMU, battery guard, motion bridge, vendor JPG, and Scout memory pressure when live probing is enabled.
 
 ## Probe Workflow
 

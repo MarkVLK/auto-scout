@@ -69,7 +69,8 @@ Pay attention to:
 - whether pose, motion, notify, and dock capabilities are declared correctly
 - whether the Scout probe found the expected vendor odometry and motion topics
 - whether the Scout probe can passively see the battery status topic, battery guard state topic, vendor dock status topic, and `/nav_low_bat` service type
-- whether mapping, patrol, and smoke-loop readiness are reported as `PASS`, `WARN`, or `FAIL`
+- while the LD19 is detached, whether LiDAR serial access, mapping, patrol, and smoke-loop autonomy are reported as intentional `SKIP` checks instead of launch failures
+- during live Scout validation, whether `/userdata/auto-scout/auto-scout.swap` appears in `/proc/swaps` and recent OOM/SIGKILL log checks are clean
 
 If you only want to validate the repo wiring without probing the current machine, use:
 
@@ -83,7 +84,7 @@ Before touching autonomy:
 
 - confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
 - confirm vendor `/CoreNode/jpg` is visible and that the companion `vendor_jpg_bridge.py` republishes frames on `/camera/image_raw/compressed`
-- confirm the LD19 publishes `/scan`
+- while the LD19 is detached, keep `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false`; after the mount/harness is installed, re-enable them and confirm the LD19 publishes `/scan`
 - confirm vendor ToF and IMU are normalized to `/scout/tof` and `/scout/imu/data`
 - confirm `/scout/safety_state` is being published by `scout_safety_filter.py`
 - confirm `/scout/battery_guard_state` is being published by `scout_battery_dock_guard.py`
@@ -102,8 +103,11 @@ Do not treat camera, ToF, or IMU as a LiDAR fallback for normal autonomy; the cu
 Charging on the dock is an allowed mission-start state once battery is at or above `safety.mission_start_min_battery_level`; below that, the companion refuses the mission and reports the current battery percentage.
 Do not call `/nav_low_bat` during bring-up unless the robot is near the dock and an operator has explicitly confirmed a live docking test.
 For proof photos, use vendor `/CoreNode/jpg` through the companion bridge as the normal path. `scout_camera_driver.py` stays disabled by default and is only an opt-in direct `/dev/video0` fallback. Vendor `/CoreNode/h264` remains available for future video work, but smoke-loop still-photo capture does not use it yet.
+The companion vendor JPG bridge is lazy: `/CoreNode/jpg` should have no bridge subscriber until a proof-photo preflight or other consumer subscribes to `/camera/image_raw/compressed`.
 
 ## 3. Start Mapping On The Companion
+
+Skip this section while the LD19 is detached. The deployed defaults intentionally keep `ld19_lidar_driver`, `slam_gmapping`, `navigation.launch`, and `battery_map_return_controller.py` off until `/scan` is restored.
 
 ```bash
 ./auto-scout configure scout
@@ -114,7 +118,7 @@ For proof photos, use vendor `/CoreNode/jpg` through the companion bridge as the
 roslaunch auto-scout slam_mapping.launch
 ```
 
-The deployed companion container now defaults to mapping mode. Leave `AUTO_SCOUT_LOCALIZATION_MODE=false` for first bring-up, save a map to `/srv/auto-scout/maps/house_map.yaml`, then switch `AUTO_SCOUT_LOCALIZATION_MODE=true` only after that file exists.
+After the LD19 is mounted and `/scan` is validated, set `AUTO_SCOUT_ENABLE_LIDAR=true` on the Scout service and `AUTO_SCOUT_ENABLE_NAV_STACK=true` on the companion service. Leave `AUTO_SCOUT_LOCALIZATION_MODE=false` for first bring-up, save a map to `/srv/auto-scout/maps/house_map.yaml`, then switch `AUTO_SCOUT_LOCALIZATION_MODE=true` only after that file exists.
 
 If you have reliable scan plus pose, you can:
 
@@ -155,8 +159,11 @@ Recommended patrol flow:
 When you are ready for a real proof run, use:
 
 ```bash
+export AUTO_SCOUT_ENABLE_NAV_STACK=true
 ./auto-scout run smoke-loop
 ```
+
+Without that explicit opt-in, `./auto-scout run smoke-loop` refuses during preflight with `nav_stack_disabled`.
 
 ## 7. Dog Search
 

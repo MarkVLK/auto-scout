@@ -58,6 +58,12 @@ class RemoteAccessTest(unittest.TestCase):
         self.assertIn("BatchMode=yes", " ".join(agent_command))
         self.assertNotIn("-i", agent_command)
 
+        alias_command = runner.build_ssh_command(
+            dict(base, host="192.168.0.87", host_key_alias="auto-scout-pi5.local"),
+            "true",
+        )
+        self.assertIn("HostKeyAlias=auto-scout-pi5.local", " ".join(alias_command))
+
         key_command = runner.build_ssh_command(
             dict(base, auth={"mode": "key", "key_path": "/tmp/scout-key"}),
             "true",

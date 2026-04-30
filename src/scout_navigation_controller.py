@@ -36,6 +36,7 @@ from config_utils import load_scout_config
 DEFAULT_MISSION_START_MIN_BATTERY_LEVEL = 50.0
 BATTERY_TOO_LOW_REASON = "battery_too_low_to_leave_dock"
 CAMERA_FRAME_UNAVAILABLE_REASON = "camera_frame_unavailable"
+NAV_STACK_DISABLED_REASON = "nav_stack_disabled"
 NAVIGATION_SCAN_UNAVAILABLE_REASON = "navigation_scan_unavailable"
 NAVIGATION_TF_UNAVAILABLE_REASON = "navigation_tf_unavailable"
 REQUIRED_NAVIGATION_TF_EDGES = [
@@ -265,7 +266,17 @@ class CompanionMissionController(object):
         safety = self.config.get("safety", {}) if isinstance(self.config.get("safety", {}), dict) else {}
         return float(safety.get("mission_start_min_battery_level", DEFAULT_MISSION_START_MIN_BATTERY_LEVEL))
 
+    def nav_stack_enabled(self):
+        return _as_bool(os.environ.get("AUTO_SCOUT_ENABLE_NAV_STACK"), False)
+
     def evaluate_mission_start_preflight(self):
+        if not self.nav_stack_enabled():
+            return {
+                "ok": False,
+                "reason": NAV_STACK_DISABLED_REASON,
+                "nav_stack_enabled": False,
+                "message": "AUTO_SCOUT_ENABLE_NAV_STACK is false; refusing autonomous mission before motion",
+            }
         state = self.wait_for_battery_guard_state()
         battery_gate = evaluate_dock_departure_gate(state, self.mission_start_min_battery_level())
         if not battery_gate["ok"]:
@@ -296,7 +307,7 @@ class CompanionMissionController(object):
             result["reason"] = CAMERA_FRAME_UNAVAILABLE_REASON
         return result
 
-    def evaluate_camera_preflight(self, timeout_seconds=5.0):
+    def evaluate_camera_preflight(self, timeout_seconds=10.0):
         if not self.mission_requires_still_photo():
             return self.camera_input_state()
         start = self.rospy.Time.now()

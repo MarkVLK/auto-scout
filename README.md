@@ -1,6 +1,6 @@
 # Auto-Scout
 
-Auto-Scout is a companion-first autonomy project for a Moorebot Scout with an added LD19-class 2D LiDAR. The repository is now documented and structured around what the Scout platform appears to support in practice, not around the earlier assumption that the robot could run a full modern ROS autonomy stack, web UI, voice stack, and ML inference locally.
+Auto-Scout is a companion-first autonomy project for a Moorebot Scout with an added LD19-class 2D LiDAR. The current default is a no-LD19 holding mode while the sensor is detached for a permanent mount/harness, so Scout-local safety and vendor/manual behavior stay available without launching scan-dependent autonomy.
 
 The clean-slate reset in this repo now treats the runnable system as two explicit roles:
 
@@ -35,10 +35,11 @@ Use two execution tiers:
 1. Scout-side runtime
 
 - Keep this lightweight.
-- Publish or bridge camera, IMU, ToF, and LD19 scan data.
+- Publish or bridge camera, IMU, ToF, and LD19 scan data when the LD19 is physically attached.
 - Execute motion primitives and media capture.
 - Own the low-battery return-to-dock guard and final vendor docking handoff.
 - Prefer the Scout's existing vision stack or a thin bridge over heavyweight onboard ML.
+- Keep the deploy-managed `/userdata/auto-scout/auto-scout.swap` file active across reboot to absorb short memory spikes on the constrained Scout.
 
 2. Companion runtime
 
@@ -46,7 +47,7 @@ Use two execution tiers:
 - Keep the supported autonomy userspace inside one host-networked ROS1 companion container.
 - Prefer Ubuntu 18.04 + ROS Melodic inside that container.
 - Fall back to Ubuntu 16.04 + ROS Kinetic only if you must match an older ROS1 environment.
-- Run `slam_gmapping`, `map_server`, `amcl`, `move_base`, and optional `explore_lite`.
+- Run `slam_gmapping`, `map_server`, `amcl`, `move_base`, and optional `explore_lite` only after `/scan` and pose are restored.
 - When localization is healthy, claim low-battery map return and drive to the configured dock approach waypoint before handing final docking back to Scout.
 - Store maps and patrol media here first, then forward to NAS, cloud, or messaging integrations.
 
@@ -70,9 +71,9 @@ The supported v1 runtime surface is intentionally headless:
 - [config/missions/smoke_loop.yaml](config/missions/smoke_loop.yaml)
   canonical proof mission for a real room loop, return, photo capture, and notification
 - `launch/scout_runtime.launch`
-  Scout-side launch for the thin bridge runtime, including camera, LD19, ToF, IMU, odometry, low-battery dock guard, safety filtering, and motion normalization
+  Scout-side launch for the thin bridge runtime, including optional direct camera, optional LD19, ToF, IMU, odometry, low-battery dock guard, safety filtering, and motion normalization
 - `launch/companion_runtime.launch`
-  companion-side launch for localization or SLAM plus the companion runtime heartbeat and low-battery map-return controller
+  companion-side launch for the runtime heartbeat and lazy vendor JPG bridge, with localization, SLAM, and map-return gated behind `enable_nav_stack`
 
 Legacy browser and voice surfaces are quarantined under [legacy/README.md](legacy/README.md). They are not part of the supported deployment path anymore.
 
@@ -84,7 +85,10 @@ For the rooted Scout unit validated in the LiDAR bring-up transcript, treat thes
 - Scout LiDAR device: `/dev/ttyS4`
 - Scout ROS era: Melodic / Python 2.7
 - Scout drive model: `diff` for a non-strafing treaded base
-- Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch`
+- Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch` only when `AUTO_SCOUT_ENABLE_LIDAR=true`
+- Current LD19-detached default: Scout deploy renders `AUTO_SCOUT_ENABLE_LIDAR=false`, companion deploy renders `AUTO_SCOUT_ENABLE_NAV_STACK=false`, and validation treats `/scan`, mapping, patrol, and smoke-loop autonomy as intentionally disabled
+- Current camera default: Scout direct OpenCV capture stays off with `AUTO_SCOUT_ENABLE_CAMERA=false`; proof photos use vendor `/CoreNode/jpg` through a lazy companion bridge that subscribes only while `/camera/image_raw/compressed` has consumers
+- Current memory default: Scout deploy installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap` and validation checks `/proc/swaps`, `free -m`, and recent OOM/SIGKILL logs during live Scout validation
 - Scout built-in sensor path: vendor ToF and IMU topics are normalized to `/scout/tof` and `/scout/imu/data`
 - Scout low-battery path: `scout_battery_dock_guard.py` watches `/SensorNode/simple_battery_status`, publishes `/scout/battery_guard_state`, accepts `/scout/battery_guard_control`, monitors `/CoreNode/going_home_status`, and calls vendor `/nav_low_bat` only when a return-to-dock action is required
 - Scout command safety path: `move_base` publishes `/scout/cmd_vel_planner`, `scout_safety_filter.py` gates fresh planner commands only, and `scout_motion_bridge.py` sends only filtered `/scout/cmd_vel_companion` commands to `/cmd_vel_force`
@@ -226,11 +230,11 @@ Treat the bring-up sequence as:
 
 1. Verify the real Scout surface first:
    run `./auto-scout probe scout --observe-motion 15` and decide whether your rooted unit exposes a usable remote ROS graph, only vendor APIs, or a mix
-2. Prove scan plus pose:
-   until a pose source is declared and tested, neither `move_base` nor Nav2 is the next problem
+2. Hold scan-dependent autonomy until the LD19 is mounted:
+   with the current defaults, `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false`; after `/scan` returns, prove scan plus pose before treating `move_base` as ready
 3. Confirm built-in sensor, battery, and safety topics:
    verify `/scout/tof`, `/scout/imu/data`, `/scout/safety_state`, `/SensorNode/simple_battery_status`, `/scout/battery_guard_state`, `/CoreNode/going_home_status`, and the passive presence/type of `/nav_low_bat`; treat ToF/IMU as safety and context, not LiDAR fallback
-4. Start with manual-drive mapping:
+4. Start with manual-drive mapping after `/scan` is restored:
    validate `/scan`, `/odom`, TF, and pose inside the companion container, then save and reload a map
 5. Add patrol next:
    only after map save/load and localization work
@@ -295,10 +299,10 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- VERIFIED_ARCHITECTURE.md        # Verified hardware/software facts and the design conclusions derived from them.
 |   `-- setup_guide.md                  # End-to-end Moorebot Scout plus LD19 companion setup guide.
 |-- launch/                             # ROS launch entrypoints for Scout and companion roles.
-|   |-- companion_runtime.launch        # Selects mapping or localization mode and starts companion heartbeat, vendor JPG camera, and battery map-return nodes.
+|   |-- companion_runtime.launch        # Starts companion heartbeat and lazy vendor JPG camera bridge; gates nav/map-return behind enable_nav_stack.
 |   |-- navigation.launch               # Companion localization plus `move_base` stack for saved-map patrols.
 |   |-- scout_complete.launch           # Combined bring-up wrapper for optional local Scout bridge plus companion runtime.
-|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, lidar, optional direct camera, ToF, IMU, battery guard, safety, odom, and motion nodes.
+|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, optional lidar, optional direct camera, ToF, IMU, battery guard, safety, odom, and motion nodes.
 |   `-- slam_mapping.launch             # Companion-side gmapping stack with robot model and transforms.
 |-- legacy/                             # Quarantined browser and voice surfaces that are no longer on the supported path.
 |   |-- README.md                       # Explains what was retired and where the supported interfaces now live.
@@ -356,7 +360,9 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- auto-scout-companion-runtime.service # Example companion systemd unit.
 |   |-- auto-scout-ros-log-cleanup.service # Example ROS log retention cleanup unit.
 |   |-- auto-scout-ros-log-cleanup.timer # Example timer for daily ROS log cleanup.
-|   `-- auto-scout-scout-runtime.service # Example Scout systemd unit.
+|   |-- auto-scout-scout-runtime.service # Example Scout systemd unit.
+|   |-- auto-scout-scout-swap-setup.service # Example one-shot setup unit for persistent Scout swap.
+|   `-- userdata-auto\x2dscout-auto\x2dscout.swap.swap # Example systemd swap unit for /userdata/auto-scout/auto-scout.swap.
 |-- templates/                          # Placeholder for local or legacy template assets; empty in git.
 |-- tests/                              # Regression coverage for validator, probing, and LD19 parsing behavior.
 |   |-- __init__.py                     # Test package marker.
@@ -381,7 +387,8 @@ This listing covers the maintained tracked project tree and also calls out the l
 ### Phase 1
 
 - Verify root access and topic or API access on the Scout.
-- Bring up the LD19, camera, ToF, IMU, low-battery dock guard, safety filter, and Scout-side odom/motion compatibility bridges.
+- Bring up the camera bridge, ToF, IMU, low-battery dock guard, safety filter, Scout swap, and Scout-side odom/motion compatibility bridges while the LD19 is detached.
+- Re-enable the LD19 and companion nav stack only after the permanent mount/harness is installed and `/scan` is revalidated.
 - Confirm `./auto-scout probe scout --observe-motion 15` and `./auto-scout probe scout --exercise-cmd-vel` behave as expected.
 
 ### Phase 2
@@ -425,7 +432,8 @@ Use the headless CLI for supported deployment, validation, and smoke-mission wor
 ./auto-scout validate companion
 ./auto-scout validate system
 
-# Run the canonical real-world proof mission
+# Run the canonical real-world proof mission after the LD19/nav stack is re-enabled
+export AUTO_SCOUT_ENABLE_NAV_STACK=true
 ./auto-scout run smoke-loop
 ```
 

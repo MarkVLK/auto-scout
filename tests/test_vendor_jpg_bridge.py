@@ -49,9 +49,25 @@ class FakePublisher:
         self.data_class = data_class
         self.queue_size = queue_size
         self.messages = []
+        self.connection_count = 0
 
     def publish(self, message):
         self.messages.append(message)
+
+    def get_num_connections(self):
+        return self.connection_count
+
+
+class FakeSubscriber:
+    def __init__(self, topic, data_class, callback, queue_size=1):
+        self.topic = topic
+        self.data_class = data_class
+        self.callback = callback
+        self.queue_size = queue_size
+        self.unregistered = False
+
+    def unregister(self):
+        self.unregistered = True
 
 
 class FakeRospy:
@@ -66,13 +82,15 @@ class FakeRospy:
     def __init__(self):
         self.publishers = []
         self.subscribers = []
+        self.params = {}
+        self.now_seconds = 100.0
 
     def init_node(self, name, anonymous=False):
         self.node_name = name
         self.anonymous = anonymous
 
     def get_param(self, name, default=None):
-        return default
+        return self.params.get(name, default)
 
     def Publisher(self, topic, data_class, queue_size=1):
         publisher = FakePublisher(topic, data_class, queue_size=queue_size)
@@ -80,12 +98,7 @@ class FakeRospy:
         return publisher
 
     def Subscriber(self, topic, data_class, callback, queue_size=1):
-        subscriber = {
-            "topic": topic,
-            "data_class": data_class,
-            "callback": callback,
-            "queue_size": queue_size,
-        }
+        subscriber = FakeSubscriber(topic, data_class, callback, queue_size=queue_size)
         self.subscribers.append(subscriber)
         return subscriber
 
@@ -126,8 +139,9 @@ class VendorFrameParserTest(unittest.TestCase):
 
 
 class VendorJpgBridgeTest(unittest.TestCase):
-    def make_bridge(self):
+    def make_bridge(self, params=None):
         fake_rospy = FakeRospy()
+        fake_rospy.params.update(params or {})
         sensor_msgs = types.ModuleType("sensor_msgs")
         sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
         sensor_msgs_msg.CompressedImage = FakeCompressedImage
@@ -166,13 +180,15 @@ class VendorJpgBridgeTest(unittest.TestCase):
 
     def test_bridge_publishes_valid_jpg_as_compressed_image(self):
         bridge, fake_rospy = self.make_bridge()
+        bridge.publisher.connection_count = 1
+        bridge.update_subscription()
 
         bridge.callback(FakeAnyMsg(serialized_frame(VIDEO_STREAM_JPG, b"\xff\xd8jpg")))
 
         self.assertEqual(bridge.source_topic, "/CoreNode/jpg")
         self.assertEqual(bridge.output_topic, "/camera/image_raw/compressed")
-        self.assertEqual(fake_rospy.subscribers[0]["topic"], "/CoreNode/jpg")
-        self.assertIs(fake_rospy.subscribers[0]["data_class"], FakeRospy.AnyMsg)
+        self.assertEqual(fake_rospy.subscribers[0].topic, "/CoreNode/jpg")
+        self.assertIs(fake_rospy.subscribers[0].data_class, FakeRospy.AnyMsg)
         self.assertEqual(len(bridge.publisher.messages), 1)
         image = bridge.publisher.messages[0]
         self.assertEqual(image.header.stamp, "receive-time")
@@ -182,9 +198,40 @@ class VendorJpgBridgeTest(unittest.TestCase):
 
     def test_bridge_ignores_h264_and_malformed_frames(self):
         bridge, _ = self.make_bridge()
+        bridge.publisher.connection_count = 1
+        bridge.update_subscription()
 
         bridge.callback(FakeAnyMsg(serialized_frame(VIDEO_STREAM_H264, b"h264")))
         bridge.callback(FakeAnyMsg(b"\x00\x01"))
+
+        self.assertEqual(bridge.publisher.messages, [])
+
+    def test_lazy_bridge_subscribes_only_while_output_has_consumers(self):
+        bridge, fake_rospy = self.make_bridge(params={"~idle_timeout": 2.0})
+
+        self.assertIsNone(bridge.subscriber)
+        bridge.update_subscription()
+        self.assertEqual(fake_rospy.subscribers, [])
+
+        bridge.publisher.connection_count = 1
+        bridge.update_subscription()
+        self.assertIsNotNone(bridge.subscriber)
+        self.assertEqual(fake_rospy.subscribers[0].topic, "/CoreNode/jpg")
+
+        bridge.publisher.connection_count = 0
+        bridge.update_subscription()
+        self.assertIsNotNone(bridge.subscriber)
+
+        bridge.last_consumer_time -= 3.0
+        old_subscriber = fake_rospy.subscribers[0]
+        bridge.update_subscription()
+        self.assertIsNone(bridge.subscriber)
+        self.assertTrue(old_subscriber.unregistered)
+
+    def test_lazy_bridge_does_not_publish_without_output_consumers(self):
+        bridge, _ = self.make_bridge()
+
+        bridge.callback(FakeAnyMsg(serialized_frame(VIDEO_STREAM_JPG, b"\xff\xd8jpg")))
 
         self.assertEqual(bridge.publisher.messages, [])
 

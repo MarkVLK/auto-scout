@@ -88,6 +88,9 @@ class CommandRunner:
             "-o",
             "BatchMode={}".format("yes" if batch_mode else "no"),
         ]
+        host_key_alias = str(ssh_config.get("host_key_alias") or "").strip()
+        if host_key_alias:
+            options.extend(["-o", "HostKeyAlias={}".format(host_key_alias)])
 
         if auth["mode"] == "password":
             options.extend(

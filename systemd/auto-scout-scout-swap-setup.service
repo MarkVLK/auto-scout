@@ -1,0 +1,13 @@
+# Example unit only. `./auto-scout deploy scout` renders and installs this
+# alongside the path-escaped swap unit for /userdata/auto-scout/auto-scout.swap.
+[Unit]
+Description=Prepare Auto-Scout Scout swap file
+DefaultDependencies=no
+After=local-fs.target
+RequiresMountsFor=/userdata
+Before=userdata-auto\x2dscout-auto\x2dscout.swap.swap
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -lc 'set -euo pipefail; mkdir -p "$(dirname "/userdata/auto-scout/auto-scout.swap")"; if [ ! -f "/userdata/auto-scout/auto-scout.swap" ]; then if command -v fallocate >/dev/null 2>&1; then fallocate -l 512M "/userdata/auto-scout/auto-scout.swap"; else dd if=/dev/zero of="/userdata/auto-scout/auto-scout.swap" bs=1M count=512; fi; fi; chmod 600 "/userdata/auto-scout/auto-scout.swap"; if [ -x /sbin/blkid ] && /sbin/blkid -o value -s TYPE "/userdata/auto-scout/auto-scout.swap" 2>/dev/null | grep -qx swap; then :; else /sbin/mkswap "/userdata/auto-scout/auto-scout.swap"; fi'

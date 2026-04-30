@@ -3,13 +3,15 @@
   <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
   <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
   <arg name="enable_camera" default="false" />
+  <arg name="enable_lidar" default="false" />
 
   <rosparam file="$(arg config_file)" command="load" />
 
   <node name="scout_runtime_agent" pkg="auto-scout" type="scout_runtime_agent.py"
         args="--site $(arg site_file)" output="screen" />
 
-  <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen">
+  <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen"
+        if="$(arg enable_lidar)">
     <param name="config_file" value="$(arg config_file)" />
     <param name="site_file" value="$(arg site_file)" />
   </node>

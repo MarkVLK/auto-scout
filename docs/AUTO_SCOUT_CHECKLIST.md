@@ -1,7 +1,7 @@
 # Auto-Scout Project Checklist
 
 Generated after architecture review session: April 2026.
-Last Codex update: 2026-04-28.
+Last Codex update: 2026-04-30.
 
 Reference this when resuming work. Items are ordered by dependency.
 
@@ -40,6 +40,11 @@ Reference this when resuming work. Items are ordered by dependency.
   - Scout `/etc/nsswitch.conf` hosts line is `files mdns4_minimal [NOTFOUND=return] dns`
 - [x] Repo-managed Scout runtime deployed
   - 2026-04-26 validation: Scout service is installed and the ROS graph includes `/ld19_lidar_driver`, `/scout_motion_bridge`, `/scout_odom_bridge`, and `/scout_runtime_agent`
+- [x] No-LD19 holding mode added while the sensor is detached for fixture work
+  - Scout service default: `AUTO_SCOUT_ENABLE_LIDAR=false`
+  - Companion service/container default: `AUTO_SCOUT_ENABLE_NAV_STACK=false`
+  - Validation should treat LiDAR serial access, mapping, patrol, and smoke-loop autonomy as intentional skips until `/scan` is restored
+  - Battery guard, final vendor dock handoff, safety filter, motion bridge, odom bridge, ToF/IMU normalization, and vendor JPG availability remain on the supported path
 - [x] Repo-managed `/scan` verified after Scout runtime deploy
   - 2026-04-26 validation: `/scan` is published by `/ld19_lidar_driver` and visible to the companion container
 - [x] Normalized `/odom` and companion command input are present
@@ -70,12 +75,18 @@ Reference this when resuming work. Items are ordered by dependency.
   - 2026-04-27 validation: live test message `auto-scout-rsyslog-verify-1777349420` reached `/var/log/syslog`, `/var/log/messages`, `/var/log/user.log`, and journald
   - 2026-04-27 validation: `logrotate -d /etc/logrotate.d/rsyslog` completed with status 0; the rsyslog logrotate file currently includes `maxsize 50M`
   - 2026-04-27 validation: `systemctl --failed` lists only the deferred vendor `rockchip.service`
+- [x] Scout swap persistence implemented in the repo
+  - 2026-04-30 implementation: deploy installs `auto-scout-scout-swap-setup.service` plus the path-escaped `userdata-auto\x2dscout-auto\x2dscout.swap.swap` unit
+  - The setup service retains the existing `/userdata/auto-scout/auto-scout.swap` file, creates it as 512 MiB if missing, sets mode `600`, and runs `mkswap` only when the file is not already formatted as swap
+  - Deploy enables the swap unit for reboot persistence and validates `/proc/swaps`, permissions, and swap formatting
+  - Runtime validation now checks `free -m`, `/proc/swaps`, and recent OOM/SIGKILL log lines on the Scout during live validation
 
 ### Still To Do on Scout
 - [ ] Print/install the permanent LD19 fixture and lock down the LiDAR cabling
   - Keep the LiDAR on Scout UART path `/dev/ttyS4`
   - Add cable strain relief so robot motion cannot shift or unplug the sensor
   - Re-measure the LiDAR pose relative to `base_link` and update `urdf/scout.urdf` if the checked-in `base_laser` transform is wrong
+  - Keep `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false` until this is done and `/scan` is revalidated
 
 - [ ] During a safe manual-drive window, rerun validation with odometry motion observation
   ```bash
@@ -149,6 +160,7 @@ These review items are complete in the current repo. Keep this section as a refe
 
 - [x] `CMakeLists.txt`: unused native OpenCV dependency removed
 - [x] `src/vendor_jpg_bridge.py`: companion-side adapter uses vendor `/CoreNode/jpg` as the normal proof-photo source and republishes it as `/camera/image_raw/compressed`
+- [x] `src/vendor_jpg_bridge.py`: bridge subscribes to vendor `/CoreNode/jpg` lazily only while `/camera/image_raw/compressed` has consumers, then idles after a short timeout
 - [x] `src/scout_camera_driver.py`: direct `/dev/video0` capture remains available as an opt-in Scout fallback, but it is disabled by default for normal missions
 - [x] `launch/companion_runtime.launch`: companion runtime starts `vendor_jpg_bridge.py` so proof photos use the vendor JPG stream without running OpenCV on the Scout
 - [x] Mission preflight: still-photo missions refuse before motion with `camera_frame_unavailable` if `/camera/image_raw/compressed` has not produced a frame
@@ -157,6 +169,8 @@ These review items are complete in the current repo. Keep this section as a refe
 - [x] `launch/navigation.launch`: `odom_model_type` is driven by `AUTO_SCOUT_ODOM_MODEL_TYPE`, defaulting to `diff`
 - [x] `launch/navigation.launch`: `move_base` output is routed to `/scout/cmd_vel_planner` so Scout-side safety filtering owns the final command gate
 - [x] `launch/scout_runtime.launch`: ToF bridge, IMU bridge, and safety filter nodes are part of the Scout runtime
+- [x] `launch/scout_runtime.launch`: `enable_lidar` defaults false so the LD19 driver does not run while the sensor is detached
+- [x] `launch/companion_runtime.launch`: `enable_nav_stack` defaults false so scan-dependent SLAM, navigation, and map-return do not run without `/scan`
 - [x] `src/scout_tof_bridge.py`: vendor `/SensorNode/tof` is normalized to `/scout/tof`
 - [x] `src/scout_imu_bridge.py`: vendor `/SensorNode/imu` is normalized to `/scout/imu/data`
 - [x] `src/scout_safety_filter.py`: ToF range and `/scan` freshness gate planner velocity commands before the vendor motion bridge
@@ -179,6 +193,7 @@ These review items are complete in the current repo. Keep this section as a refe
   AUTO_SCOUT_STORAGE_ROOT=/srv/auto-scout
   AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs
   AUTO_SCOUT_LOCALIZATION_MODE=false
+  AUTO_SCOUT_ENABLE_NAV_STACK=false
   ```
 - [x] `scripts/cleanup_ros_logs.py`: ROS log cleanup utility added with `--dry-run`, age pruning, and size pruning
 - [x] `src/auto_scout/deploy.py`: deploy creates ROS log directories and installs `auto-scout-ros-log-cleanup.service` plus `auto-scout-ros-log-cleanup.timer`
@@ -351,9 +366,11 @@ These review items are complete in the current repo. Keep this section as a refe
 
 - [x] Smoke-loop dry run passes without moving the robot
   ```bash
+  export AUTO_SCOUT_ENABLE_NAV_STACK=true
   ./auto-scout run smoke-loop --dry-run
   ```
   2026-04-26 result: `ok: true`, `phase: remote_execution`.
+  2026-04-30 note: while the LD19 is detached, leave `AUTO_SCOUT_ENABLE_NAV_STACK=false`; dry run now refuses in preflight with `nav_stack_disabled` unless the nav stack is explicitly re-enabled after `/scan` is restored.
 
 ### ROS Networking Verification
 - [x] Start the container in mapping mode (`AUTO_SCOUT_LOCALIZATION_MODE=false`)
@@ -393,6 +410,8 @@ These review items are complete in the current repo. Keep this section as a refe
 ---
 
 ## Phase 4: Mapping
+
+Paused while the LD19 is detached. Keep `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false` until the permanent fixture is installed and `/scan` is revalidated.
 
 - [x] Deploy full stack
   ```bash
@@ -435,11 +454,14 @@ These review items are complete in the current repo. Keep this section as a refe
   - Keep the real webhook URL out of tracked files
 - [x] Run smoke-loop dry run
   ```bash
+  export AUTO_SCOUT_ENABLE_NAV_STACK=true
   ./auto-scout run smoke-loop --dry-run
   ```
   2026-04-26 result: dry run passed with `ok: true`.
+  2026-04-30 note: current no-LD19 mode intentionally refuses this command before motion unless the nav stack has been re-enabled.
 - [ ] Run real smoke test mission only after confirming the robot is in a safe area
   ```bash
+  export AUTO_SCOUT_ENABLE_NAV_STACK=true
   ./auto-scout run smoke-loop
   ```
 - [ ] Verify full mission photo artifact capture at each waypoint after LiDAR is reattached and `/scan` is publishing

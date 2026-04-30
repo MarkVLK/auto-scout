@@ -1,6 +1,7 @@
 """Deployment routines for the clean-slate Scout and companion runtimes."""
 
 from copy import deepcopy
+import ipaddress
 import os
 import tempfile
 
@@ -28,6 +29,11 @@ ROS_LOG_MAX_BYTES = 100 * 1024 * 1024
 SCOUT_ROS_LOG_DIR = "/userdata/auto-scout/ros-logs"
 ROS_LOG_CLEANUP_SERVICE = "auto-scout-ros-log-cleanup.service"
 ROS_LOG_CLEANUP_TIMER = "auto-scout-ros-log-cleanup.timer"
+SCOUT_SWAP_PATH = "/userdata/auto-scout/auto-scout.swap"
+SCOUT_SWAP_SIZE_MIB = 512
+SCOUT_SWAP_SETUP_SERVICE = "auto-scout-scout-swap-setup.service"
+SCOUT_SWAP_UNIT = "userdata-auto\\x2dscout-auto\\x2dscout.swap.swap"
+COMPANION_CONTAINER_WORKSPACE = "/opt/catkin_ws/src/auto-scout"
 
 
 def _require_configured_setting(setting_name, value):
@@ -37,6 +43,20 @@ def _require_configured_setting(setting_name, value):
     if ".invalid" in value:
         raise ValueError("{} is still using the generated placeholder '{}'.".format(setting_name, value))
     return value
+
+
+def _is_ip_address(value):
+    try:
+        ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _render_ros_advertise_env(advertise_host, *, prefix=""):
+    if _is_ip_address(advertise_host):
+        return "Environment={}ROS_IP={}".format(prefix, advertise_host)
+    return "Environment={}ROS_HOSTNAME={}".format(prefix, advertise_host)
 
 
 def _render_scout_service(role_settings):
@@ -62,10 +82,11 @@ Environment=AUTO_SCOUT_WORKSPACE={workspace_dir}
 Environment=AUTO_SCOUT_CONFIG={config_path}
 Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
 Environment=ROS_MASTER_URI={ros_master_uri}
-Environment=ROS_HOSTNAME={advertise_host}
+{ros_advertise_env}
 Environment=ROS_LOG_DIR={ros_log_dir}
 Environment=ROS_OS_OVERRIDE=debian:stretch
 Environment=AUTO_SCOUT_ENABLE_CAMERA=false
+Environment=AUTO_SCOUT_ENABLE_LIDAR=false
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5
@@ -81,7 +102,7 @@ WantedBy=multi-user.target
         config_path=config_path,
         site_path=site_path,
         ros_master_uri=ros_master_uri,
-        advertise_host=advertise_host,
+        ros_advertise_env=_render_ros_advertise_env(advertise_host),
         ros_log_dir=SCOUT_ROS_LOG_DIR,
     )
 
@@ -109,11 +130,12 @@ Group={service_group}
 WorkingDirectory={workspace_dir}
 Environment=AUTO_SCOUT_WORKSPACE={workspace_dir}
 Environment=AUTO_SCOUT_STORAGE_ROOT={storage_root}
-Environment=AUTO_SCOUT_CONFIG={workspace_dir}/config/scout_config.yaml
+Environment=AUTO_SCOUT_CONFIG={container_workspace}/config/scout_config.yaml
 Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
 Environment=AUTO_SCOUT_ROS_MASTER_URI={ros_master_uri}
-Environment=AUTO_SCOUT_ROS_HOSTNAME={advertise_host}
+{ros_advertise_env}
 Environment=AUTO_SCOUT_ODOM_MODEL_TYPE={drive_model}
+Environment=AUTO_SCOUT_ENABLE_NAV_STACK=false
 Environment=AUTO_SCOUT_ROS_LOG_DIR={ros_log_dir}
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh up'
 ExecStop=/bin/bash -lc '{workspace_dir}/scripts/start_companion_stack.sh down'
@@ -125,10 +147,11 @@ WantedBy=multi-user.target
         service_user=service_user,
         service_group=service_group,
         workspace_dir=workspace_dir,
+        container_workspace=COMPANION_CONTAINER_WORKSPACE,
         storage_root=storage_root,
-        site_path=remote_site_config_path(workspace_dir),
+        site_path="{}/config/site_local.yaml".format(COMPANION_CONTAINER_WORKSPACE),
         ros_master_uri=ros_master_uri,
-        advertise_host=advertise_host,
+        ros_advertise_env=_render_ros_advertise_env(advertise_host, prefix="AUTO_SCOUT_"),
         drive_model=drive_model,
         ros_log_dir=ros_log_dir,
     )
@@ -177,6 +200,44 @@ Unit={service_name}
 WantedBy=timers.target
 """.format(
         service_name=ROS_LOG_CLEANUP_SERVICE,
+    )
+
+
+def _render_scout_swap_setup_service():
+    return """[Unit]
+Description=Prepare Auto-Scout Scout swap file
+DefaultDependencies=no
+After=local-fs.target
+RequiresMountsFor=/userdata
+Before={swap_unit}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -lc 'set -euo pipefail; mkdir -p "$(dirname "{swap_path}")"; if [ ! -f "{swap_path}" ]; then if command -v fallocate >/dev/null 2>&1; then fallocate -l {swap_size_mib}M "{swap_path}"; else dd if=/dev/zero of="{swap_path}" bs=1M count={swap_size_mib}; fi; fi; chmod 600 "{swap_path}"; if [ -x /sbin/blkid ] && /sbin/blkid -o value -s TYPE "{swap_path}" 2>/dev/null | grep -qx swap; then :; else /sbin/mkswap "{swap_path}"; fi'
+""".format(
+        swap_path=SCOUT_SWAP_PATH,
+        swap_size_mib=SCOUT_SWAP_SIZE_MIB,
+        swap_unit=SCOUT_SWAP_UNIT,
+    )
+
+
+def _render_scout_swap_unit():
+    return """[Unit]
+Description=Auto-Scout Scout swap file
+Requires={setup_service}
+After={setup_service}
+RequiresMountsFor=/userdata
+
+[Swap]
+What={swap_path}
+Priority=-1
+
+[Install]
+WantedBy=swap.target
+""".format(
+        setup_service=SCOUT_SWAP_SETUP_SERVICE,
+        swap_path=SCOUT_SWAP_PATH,
     )
 
 
@@ -236,6 +297,27 @@ def _install_timer_commands(service_temp_path, timer_temp_path):
     ]
 
 
+def _install_swap_commands(setup_temp_path, swap_temp_path):
+    quoted_swap_unit = "'{}'".format(SCOUT_SWAP_UNIT)
+    return [
+        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(setup_temp_path, SCOUT_SWAP_SETUP_SERVICE),
+        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(swap_temp_path, SCOUT_SWAP_UNIT),
+        "rm -f '{}' '{}'".format(setup_temp_path, swap_temp_path),
+        "sudo systemctl daemon-reload",
+        "sudo systemctl enable {}".format(quoted_swap_unit),
+        "sudo systemctl start {}".format(SCOUT_SWAP_SETUP_SERVICE),
+        (
+            "if grep -Fqw '{}' /proc/swaps; then "
+            "echo 'Auto-Scout swap already active'; "
+            "else sudo systemctl start {}; fi"
+        ).format(SCOUT_SWAP_PATH, quoted_swap_unit),
+        "sudo test -f '{}'".format(SCOUT_SWAP_PATH),
+        "test \"$(stat -c '%a' '{}')\" = '600'".format(SCOUT_SWAP_PATH),
+        "sudo /sbin/blkid -o value -s TYPE '{}' | grep -qx swap".format(SCOUT_SWAP_PATH),
+        "grep -Fqw '{}' /proc/swaps".format(SCOUT_SWAP_PATH),
+    ]
+
+
 def _prepare_remote_workspace(runner, target_root, workspace_dir, service_user, service_group):
     runner.run_remote(target_root, "sudo mkdir -p '{}'".format(workspace_dir))
     runner.run_remote(target_root, "sudo chown -R '{}:{}' '{}'".format(service_user, service_group, workspace_dir))
@@ -258,6 +340,23 @@ def _install_ros_log_cleanup(runner, target_root, workspace_dir, service_user, s
     service_temp = _copy_service_to_remote(runner, target_root, ROS_LOG_CLEANUP_SERVICE, service_text)
     timer_temp = _copy_service_to_remote(runner, target_root, ROS_LOG_CLEANUP_TIMER, timer_text)
     for command in _install_timer_commands(service_temp, timer_temp):
+        runner.run_remote(target_root, command)
+
+
+def _install_scout_swap(runner, target_root):
+    setup_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        SCOUT_SWAP_SETUP_SERVICE,
+        _render_scout_swap_setup_service(),
+    )
+    swap_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        SCOUT_SWAP_UNIT,
+        _render_scout_swap_unit(),
+    )
+    for command in _install_swap_commands(setup_temp, swap_temp):
         runner.run_remote(target_root, command)
 
 
@@ -295,6 +394,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         ros_log_dir,
         legacy_log_dirs=["/home/{}/.ros/log".format(service_user)],
     )
+    _install_scout_swap(runner, target_root)
 
     return {
         "role": "scout",
@@ -304,6 +404,8 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         "workspace_dir": workspace_dir,
         "host": target_root["host"],
         "ros_log_dir": ros_log_dir,
+        "swap_path": SCOUT_SWAP_PATH,
+        "swap_unit": SCOUT_SWAP_UNIT,
         "remote_site_path": remote_site_config_path(workspace_dir),
         "dry_run": dry_run,
     }

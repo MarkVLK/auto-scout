@@ -4,12 +4,15 @@
   <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
   <arg name="map_file" default="/srv/auto-scout/maps/house_map.yaml" />
   <arg name="localization_mode" default="true" />
+  <arg name="enable_lidar" default="false" />
+  <arg name="enable_nav_stack" default="false" />
   <arg name="run_local_scout_bridge" default="false" />
 
   <group if="$(arg run_local_scout_bridge)">
     <include file="$(find auto-scout)/launch/scout_runtime.launch">
       <arg name="config_file" value="$(arg config_file)" />
       <arg name="site_file" value="$(arg site_file)" />
+      <arg name="enable_lidar" value="$(arg enable_lidar)" />
     </include>
   </group>
 
@@ -18,5 +21,6 @@
     <arg name="site_file" value="$(arg site_file)" />
     <arg name="map_file" value="$(arg map_file)" />
     <arg name="localization_mode" value="$(arg localization_mode)" />
+    <arg name="enable_nav_stack" value="$(arg enable_nav_stack)" />
   </include>
 </launch>

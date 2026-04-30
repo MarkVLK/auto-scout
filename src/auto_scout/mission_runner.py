@@ -11,6 +11,7 @@ from auto_scout.site_config import remote_site_config_path
 
 
 CONTAINER_WORKSPACE = "/opt/catkin_ws/src/auto-scout"
+NAV_STACK_DISABLED_REASON = "nav_stack_disabled"
 
 
 def _parse_remote_mission_payload(text):
@@ -32,11 +33,23 @@ def _parse_remote_mission_payload(text):
     return payload
 
 
-def evaluate_smoke_loop_gate(site_config, mission_config):
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in ["1", "true", "yes", "on"]
+
+
+def evaluate_smoke_loop_gate(site_config, mission_config, nav_stack_enabled=True):
     """Return a structured preflight gate for the smoke loop mission."""
     issues = []
     capabilities = system_capabilities(site_config)
     required = mission_config.get("preconditions", {}).get("required_capabilities", [])
+
+    if not nav_stack_enabled:
+        issues.append(
+            "AUTO_SCOUT_ENABLE_NAV_STACK is false; autonomous smoke-loop missions are disabled until /scan is restored"
+        )
 
     for capability in required:
         if not capabilities.get(capability, False):
@@ -62,6 +75,7 @@ def evaluate_smoke_loop_gate(site_config, mission_config):
         "ok": not issues,
         "issues": issues,
         "capabilities": capabilities,
+        "nav_stack_enabled": bool(nav_stack_enabled),
     }
 
 
@@ -101,12 +115,17 @@ def _build_smoke_loop_remote_command(companion, mission_path, artifact_run):
 
 def run_smoke_loop(site_config, site_path, mission_config, mission_path, artifact_run, dry_run=False):
     """Invoke the smoke loop on the companion host."""
-    gate = evaluate_smoke_loop_gate(site_config, mission_config)
+    gate = evaluate_smoke_loop_gate(
+        site_config,
+        mission_config,
+        nav_stack_enabled=_env_flag("AUTO_SCOUT_ENABLE_NAV_STACK", False),
+    )
     artifact_run.write_json("preflight-gate.json", gate)
     if not gate["ok"]:
         return {
             "ok": False,
             "phase": "preflight",
+            "reason": NAV_STACK_DISABLED_REASON if not gate.get("nav_stack_enabled", True) else "mission_gate_failed",
             "issues": gate["issues"],
         }
 

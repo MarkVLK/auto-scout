@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
 from scout_navigation_controller import BATTERY_TOO_LOW_REASON
 from scout_navigation_controller import CAMERA_FRAME_UNAVAILABLE_REASON
 from scout_navigation_controller import CompanionMissionController
+from scout_navigation_controller import NAV_STACK_DISABLED_REASON
 from scout_navigation_controller import NAVIGATION_TF_UNAVAILABLE_REASON
 from scout_navigation_controller import REQUIRED_NAVIGATION_TF_EDGES
 from scout_navigation_controller import evaluate_dock_departure_gate
@@ -191,7 +192,8 @@ class MissionStartRefusalTest(unittest.TestCase):
             controller.wait_for_pose = lambda: self.fail("wait_for_pose should not run after TF preflight refusal")
             controller.wait_for_move_base = lambda: self.fail("wait_for_move_base should not run after TF preflight refusal")
 
-            result = controller.run_smoke_loop()
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "true"}):
+                result = controller.run_smoke_loop()
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["phase"], "preflight")
@@ -222,7 +224,8 @@ class MissionStartRefusalTest(unittest.TestCase):
             controller.send_notification = lambda photo, return_result: {"sent": False, "reason": "disabled"}
             controller.latest_pose = {"source": "odom"}
 
-            result = controller.run_smoke_loop()
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "true"}):
+                result = controller.run_smoke_loop()
 
         self.assertTrue(result["ok"])
         self.assertEqual(navigated, ["one"])
@@ -248,7 +251,8 @@ class MissionStartRefusalTest(unittest.TestCase):
             controller.wait_for_pose = lambda: self.fail("wait_for_pose should not run after camera preflight refusal")
             controller.wait_for_move_base = lambda: self.fail("wait_for_move_base should not run after camera preflight refusal")
 
-            result = controller.run_smoke_loop()
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "true"}):
+                result = controller.run_smoke_loop()
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["phase"], "preflight")
@@ -281,10 +285,25 @@ class MissionStartRefusalTest(unittest.TestCase):
             controller.send_notification = lambda photo, return_result: {"sent": False, "reason": "disabled"}
             controller.latest_pose = {"source": "odom"}
 
-            result = controller.run_smoke_loop()
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "true"}):
+                result = controller.run_smoke_loop()
 
         self.assertTrue(result["ok"])
         self.assertEqual(navigated, ["one"])
+
+    def test_mission_refuses_before_battery_check_when_nav_stack_disabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.wait_for_battery_guard_state = lambda: self.fail("battery check should not run when nav is disabled")
+            controller.evaluate_navigation_preflight = lambda: self.fail("navigation preflight should not run when nav is disabled")
+            controller.evaluate_camera_preflight = lambda: self.fail("camera preflight should not run when nav is disabled")
+
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "false"}):
+                result = controller.run_smoke_loop()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "preflight")
+        self.assertEqual(result["reason"], NAV_STACK_DISABLED_REASON)
 
     def test_notification_url_ignores_legacy_storage_webhook(self):
         with tempfile.TemporaryDirectory() as temp_dir:

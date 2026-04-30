@@ -13,10 +13,13 @@ WorkingDirectory=/userdata/catkin_ws/src/auto-scout
 Environment=AUTO_SCOUT_CONFIG=/userdata/catkin_ws/src/auto-scout/config/scout_config.yaml
 Environment=AUTO_SCOUT_SITE_CONFIG=/userdata/catkin_ws/src/auto-scout/config/site_local.yaml
 Environment=ROS_MASTER_URI=http://scout-host-or-ip.invalid:11311
-Environment=ROS_HOSTNAME=scout-host-or-ip.invalid
+# Set exactly one ROS advertise variable. Use ROS_IP for static IP deployments.
+Environment=ROS_HOSTNAME=scout-host.invalid
+#Environment=ROS_IP=192.0.2.10
 Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs
 Environment=ROS_OS_OVERRIDE=debian:stretch
 Environment=AUTO_SCOUT_ENABLE_CAMERA=false
+Environment=AUTO_SCOUT_ENABLE_LIDAR=false
 ExecStart=/bin/bash -lc '/userdata/catkin_ws/src/auto-scout/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5

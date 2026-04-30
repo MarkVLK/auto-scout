@@ -1,6 +1,7 @@
 """Live Scout capability probing and site-inventory reconciliation."""
 
 import csv
+import ipaddress
 import io
 import json
 import math
@@ -171,6 +172,14 @@ def _wrap_bash(body):
     return "/bin/bash -lc {}".format(shlex.quote(body))
 
 
+def _is_ip_address(value):
+    try:
+        ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return True
+
+
 def _ros_shell_prefix(role_settings):
     commands = [
         "if [ -f /opt/ros/melodic/setup.bash ]; then . /opt/ros/melodic/setup.bash; fi",
@@ -181,7 +190,12 @@ def _ros_shell_prefix(role_settings):
     if master_uri:
         commands.append("export ROS_MASTER_URI={}".format(shlex.quote(master_uri)))
     if advertise_host:
-        commands.append("export ROS_HOSTNAME={}".format(shlex.quote(advertise_host)))
+        if _is_ip_address(advertise_host):
+            commands.append("export ROS_IP={}".format(shlex.quote(advertise_host)))
+            commands.append("unset ROS_HOSTNAME")
+        else:
+            commands.append("export ROS_HOSTNAME={}".format(shlex.quote(advertise_host)))
+            commands.append("unset ROS_IP")
     return "; ".join(commands)
 
 

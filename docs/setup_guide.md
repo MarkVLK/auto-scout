@@ -74,6 +74,12 @@ For the LD19:
 - publish `/scan`
 - confirm a stable frame id and transform to `base_link`
 
+Until the permanent LD19 mount/harness is installed, leave the repo in no-LD19 holding mode:
+
+- Scout runtime: `AUTO_SCOUT_ENABLE_LIDAR=false`
+- Companion runtime: `AUTO_SCOUT_ENABLE_NAV_STACK=false`
+- Expected validation behavior: LiDAR serial access, mapping, patrol, and smoke-loop autonomy are `SKIP` checks, while odom, TF from odom, ToF/IMU, battery guard, motion bridge, and vendor JPG remain validated
+
 The LiDAR mount transform is a calibration input. In this repo, `urdf/scout.urdf` is the operational source of truth for the fixed `base_link` to `base_laser` transform. Measure the physical LD19 position relative to the robot base and update that URDF joint if the mount differs from the checked-in value.
 
 Programmatic calibration is possible in principle, but only with known targets, synchronized sensor data, and established camera, ToF, and LiDAR frame calibration. Treat camera, ToF, and LiDAR comparisons as validation or refinement evidence, not as a reason to automatically rewrite the URDF from casual observations.
@@ -91,9 +97,10 @@ You can publish scan data either:
 - directly on the Scout, if serial access is reliable and CPU impact is low
 - on the companion, if the LiDAR is physically attached there instead
 
-The repo's launch files now assume that a scan publisher exists and avoid depending on a missing `lidar.launch`.
+When `AUTO_SCOUT_ENABLE_LIDAR=true`, the repo-managed Scout launch uses the built-in Python LD19 driver and avoids depending on a missing external `lidar.launch`.
 
 If you are attaching the LD19 somewhere other than the Scout UART, override the default with `./auto-scout configure scout --lidar-device ...` or the matching deploy flag.
+After `/scan` is revalidated, opt back into autonomy by setting `AUTO_SCOUT_ENABLE_LIDAR=true` on the Scout service and `AUTO_SCOUT_ENABLE_NAV_STACK=true` on the companion service, then redeploy or restart the affected services.
 
 ## 5. Built-In Sensor Bridges And Safety Filter
 
@@ -115,6 +122,8 @@ The command path is intentionally split:
 Configured safety behavior lives under `safety` in `config/scout_config.yaml`. By default, ToF is optional but used when present, close ToF readings slow or stop fresh planner commands, and stale `/scan` stops normal autonomous command flow. With no fresh planner command active, the filter continues publishing `/scout/safety_state` but does not publish periodic zero commands that would interfere with iOS manual driving or vendor docking.
 
 This is not a camera/ToF/IMU navigation fallback. Full mapping and patrol still require a healthy `/scan` plus pose source. The built-in sensors add close-range safety and pose context while preserving the LD19 as the required obstacle/mapping sensor.
+
+The Scout also needs memory headroom. `./auto-scout deploy scout` installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap` using a setup service plus a systemd `.swap` unit. Live validation checks `/proc/swaps`, `free -m`, and recent OOM/SIGKILL log lines so memory pressure is visible before the kernel starts killing bridge processes again.
 
 ## 6. Low-Battery Return-To-Dock
 
@@ -305,7 +314,7 @@ For patrol missions:
 - store media on the companion
 - optionally send a webhook or messaging notification after the route completes
 
-The normal proof-photo path is companion-side normalization of vendor `/CoreNode/jpg`; this avoids running OpenCV or direct `/dev/video0` capture on the Scout during normal missions. `scout_camera_driver.py` is retained as an opt-in fallback if the vendor JPG stream is unavailable. Vendor `/CoreNode/h264` is documented as a future video source, but H.264 recording is not part of the first still-photo implementation.
+The normal proof-photo path is companion-side normalization of vendor `/CoreNode/jpg`; this avoids running OpenCV or direct `/dev/video0` capture on the Scout during normal missions. The bridge subscribes to `/CoreNode/jpg` lazily and should release that subscription a few seconds after `/camera/image_raw/compressed` has no consumers. `scout_camera_driver.py` is retained as an opt-in fallback if the vendor JPG stream is unavailable. Vendor `/CoreNode/h264` is documented as a future video source, but H.264 recording is not part of the first still-photo implementation.
 
 ## 12. Dog Search Workflow
 
@@ -329,6 +338,7 @@ Use these commands as the supported operator flow:
 ./auto-scout deploy scout
 ./auto-scout deploy companion
 ./auto-scout validate system
+export AUTO_SCOUT_ENABLE_NAV_STACK=true
 ./auto-scout run smoke-loop
 ```
 
@@ -346,8 +356,9 @@ If those batch SSH checks fail because the Pi's default key is
 passphrase-protected, use a separate Pi-local validation key and host-specific
 `~/.ssh/config` entries instead of disabling host-key checks.
 
-Before expecting `run smoke-loop` to pass, configure a Slack app incoming
-webhook for companion notifications:
+Before expecting `run smoke-loop` to pass, re-enable the nav stack after `/scan`
+is restored and configure a Slack app incoming webhook for companion
+notifications:
 
 1. Create a Slack app in the free-tier or paid workspace you manage.
 2. Enable **Incoming Webhooks** for that app.

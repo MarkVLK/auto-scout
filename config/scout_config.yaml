@@ -132,6 +132,9 @@ camera:
   height: 480
   fps: 15
   frame_id: "camera_link"
+  lazy_vendor_jpg_bridge: true
+  vendor_jpg_idle_timeout: 5.0
+  vendor_jpg_poll_hz: 2.0
 
 web:
   port: 8080

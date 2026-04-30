@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import argparse
 import struct
+import time
 
 from config_utils import load_scout_config
 from scout_runtime_config import load_site_config
@@ -16,6 +17,14 @@ VIDEO_STREAM_JPG = 1
 AUDIO_STREAM_AAC = 2
 _FRAME_PREFIX_FORMAT = "<IQIbIiiiiI"
 _FRAME_PREFIX_SIZE = struct.calcsize(_FRAME_PREFIX_FORMAT)
+
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ["1", "true", "yes", "on"]
 
 
 def _serialized_bytes(message):
@@ -98,11 +107,67 @@ class VendorJpgBridge(object):
             scout_runtime_topic(self.site_config, self.config, "camera_compressed", "/camera/image_raw/compressed"),
         )
         self.frame_id = rospy.get_param("~frame_id", camera_config.get("frame_id", "camera_link"))
+        self.lazy = _as_bool(rospy.get_param("~lazy", camera_config.get("lazy_vendor_jpg_bridge", True)), True)
+        self.idle_timeout = float(
+            rospy.get_param("~idle_timeout", camera_config.get("vendor_jpg_idle_timeout", 5.0))
+        )
+        self.poll_hz = float(rospy.get_param("~poll_hz", camera_config.get("vendor_jpg_poll_hz", 2.0)))
 
         self.publisher = rospy.Publisher(self.output_topic, CompressedImage, queue_size=1)
-        self.subscriber = rospy.Subscriber(self.source_topic, rospy.AnyMsg, self.callback, queue_size=1)
+        self.subscriber = None
+        self.last_consumer_time = None
+        if not self.lazy:
+            self.ensure_subscribed()
+
+    def _now_seconds(self):
+        try:
+            now = self.rospy.Time.now()
+            if hasattr(now, "to_sec"):
+                return now.to_sec()
+        except Exception:
+            pass
+        return time.time()
+
+    def output_has_consumers(self):
+        if not hasattr(self.publisher, "get_num_connections"):
+            return True
+        return self.publisher.get_num_connections() > 0
+
+    def ensure_subscribed(self):
+        if self.subscriber is not None:
+            return
+        self.subscriber = self.rospy.Subscriber(self.source_topic, self.rospy.AnyMsg, self.callback, queue_size=1)
+        self.rospy.loginfo("Vendor JPG bridge subscribed to %s", self.source_topic)
+
+    def stop_subscription(self):
+        if self.subscriber is None:
+            return
+        unregister = getattr(self.subscriber, "unregister", None)
+        if unregister:
+            unregister()
+        self.subscriber = None
+        self.rospy.loginfo("Vendor JPG bridge idled; unsubscribed from %s", self.source_topic)
+
+    def update_subscription(self):
+        if not self.lazy:
+            self.ensure_subscribed()
+            return
+
+        now = self._now_seconds()
+        if self.output_has_consumers():
+            self.last_consumer_time = now
+            self.ensure_subscribed()
+            return
+
+        if self.subscriber is None:
+            return
+        if self.last_consumer_time is None or now - self.last_consumer_time >= self.idle_timeout:
+            self.stop_subscription()
 
     def callback(self, msg):
+        if self.lazy and not self.output_has_consumers():
+            return
+
         frame = parse_vendor_frame(msg)
         if not frame or frame.get("type") != VIDEO_STREAM_JPG:
             return
@@ -116,11 +181,20 @@ class VendorJpgBridge(object):
 
     def run(self):
         self.rospy.loginfo(
-            "Vendor JPG bridge active: %s -> %s",
+            "Vendor JPG bridge active: %s -> %s (lazy=%s, idle_timeout=%.1fs)",
             self.source_topic,
             self.output_topic,
+            self.lazy,
+            self.idle_timeout,
         )
-        self.rospy.spin()
+        if not self.lazy:
+            self.rospy.spin()
+            return
+
+        rate = self.rospy.Rate(self.poll_hz)
+        while not self.rospy.is_shutdown():
+            self.update_subscription()
+            rate.sleep()
 
 
 def build_parser():

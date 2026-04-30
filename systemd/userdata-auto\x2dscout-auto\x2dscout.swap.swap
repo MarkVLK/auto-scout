@@ -1,0 +1,14 @@
+# Example unit only. The unit name is systemd's escaped form of
+# /userdata/auto-scout/auto-scout.swap.
+[Unit]
+Description=Auto-Scout Scout swap file
+Requires=auto-scout-scout-swap-setup.service
+After=auto-scout-scout-swap-setup.service
+RequiresMountsFor=/userdata
+
+[Swap]
+What=/userdata/auto-scout/auto-scout.swap
+Priority=-1
+
+[Install]
+WantedBy=swap.target

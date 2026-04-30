@@ -68,6 +68,8 @@ STATIC_PYTHON_DIRS = [
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 NATIVE_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp")
 PLACEHOLDER_MARKER = ".invalid"
+DEFAULT_ENABLE_LIDAR = False
+DEFAULT_ENABLE_NAV_STACK = False
 
 
 def run_command(command):
@@ -212,6 +214,21 @@ def find_local_markdown_link_targets(root_path):
 
 def _is_generated_placeholder(value):
     return PLACEHOLDER_MARKER in str(value or "")
+
+
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in ["1", "true", "yes", "on"]
+
+
+def _lidar_runtime_enabled():
+    return _env_flag("AUTO_SCOUT_ENABLE_LIDAR", DEFAULT_ENABLE_LIDAR)
+
+
+def _nav_stack_enabled():
+    return _env_flag("AUTO_SCOUT_ENABLE_NAV_STACK", DEFAULT_ENABLE_NAV_STACK)
 
 
 def _hostname_candidate(value):
@@ -653,6 +670,19 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                         )
 
     navigation_text = (REPO_ROOT / "launch" / "navigation.launch").read_text(encoding="utf-8")
+    scout_runtime_text = (REPO_ROOT / "launch" / "scout_runtime.launch").read_text(encoding="utf-8")
+    companion_runtime_text = (REPO_ROOT / "launch" / "companion_runtime.launch").read_text(encoding="utf-8")
+    scout_complete_text = (REPO_ROOT / "launch" / "scout_complete.launch").read_text(encoding="utf-8")
+    if 'name="enable_lidar" default="false"' not in scout_runtime_text:
+        launch_issues.append("launch/scout_runtime.launch must default enable_lidar to false while the LD19 is detached")
+    if 'if="$(arg enable_lidar)"' not in scout_runtime_text:
+        launch_issues.append("launch/scout_runtime.launch must gate ld19_lidar_driver behind enable_lidar")
+    if 'name="enable_nav_stack" default="false"' not in companion_runtime_text:
+        launch_issues.append("launch/companion_runtime.launch must default enable_nav_stack to false while the LD19 is detached")
+    if 'if="$(arg enable_nav_stack)"' not in companion_runtime_text:
+        launch_issues.append("launch/companion_runtime.launch must gate scan-dependent companion autonomy behind enable_nav_stack")
+    if 'name="enable_nav_stack" default="false"' not in scout_complete_text:
+        launch_issues.append("launch/scout_complete.launch must thread enable_nav_stack through to companion_runtime.launch")
     if 'name="odom_model_type"' not in navigation_text or "AUTO_SCOUT_ODOM_MODEL_TYPE" not in navigation_text:
         launch_issues.append("launch/navigation.launch must expose odom_model_type from AUTO_SCOUT_ODOM_MODEL_TYPE")
     if 'name="odom_alpha5"' not in navigation_text:
@@ -679,6 +709,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         "systemd/auto-scout-companion-runtime.service",
         "systemd/auto-scout-ros-log-cleanup.service",
         "systemd/auto-scout-ros-log-cleanup.timer",
+        "systemd/auto-scout-scout-swap-setup.service",
+        "systemd/userdata-auto\\x2dscout-auto\\x2dscout.swap.swap",
         "container/Dockerfile",
         "container/docker-compose.yml",
         "scripts/start_scout_runtime.sh",
@@ -734,11 +766,17 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
                 )
             elif env.get("ROS_MASTER_URI") != "${AUTO_SCOUT_ROS_MASTER_URI}":
                 container_issues.append("companion-runtime must source ROS_MASTER_URI from AUTO_SCOUT_ROS_MASTER_URI")
-            elif env.get("ROS_HOSTNAME") != "${AUTO_SCOUT_ROS_HOSTNAME}":
-                container_issues.append("companion-runtime must source ROS_HOSTNAME from AUTO_SCOUT_ROS_HOSTNAME")
+            elif env.get("ROS_HOSTNAME") != "${AUTO_SCOUT_ROS_HOSTNAME:-}":
+                container_issues.append("companion-runtime must source ROS_HOSTNAME from AUTO_SCOUT_ROS_HOSTNAME when a hostname is configured")
+            if env.get("ROS_IP") != "${AUTO_SCOUT_ROS_IP:-}":
+                container_issues.append("companion-runtime must source ROS_IP from AUTO_SCOUT_ROS_IP when an IP advertise address is configured")
             elif env.get("AUTO_SCOUT_ODOM_MODEL_TYPE") != "${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}":
                 container_issues.append(
                     "companion-runtime must expose AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default"
+                )
+            elif env.get("AUTO_SCOUT_ENABLE_NAV_STACK") != "${AUTO_SCOUT_ENABLE_NAV_STACK:-false}":
+                container_issues.append(
+                    "companion-runtime must expose AUTO_SCOUT_ENABLE_NAV_STACK with a no-LD19-safe default"
                 )
             elif env.get("ROS_LOG_DIR") != "${AUTO_SCOUT_ROS_LOG_DIR:-/srv/auto-scout/ros-logs}":
                 container_issues.append(
@@ -753,6 +791,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("companion-runtime command must source /opt/catkin_ws/devel/setup.bash after catkin_make")
         if "localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}" not in compose_text:
             container_issues.append("companion-runtime must default localization_mode from AUTO_SCOUT_LOCALIZATION_MODE")
+        if "enable_nav_stack:=${AUTO_SCOUT_ENABLE_NAV_STACK:-false}" not in compose_text:
+            container_issues.append("companion-runtime must default enable_nav_stack from AUTO_SCOUT_ENABLE_NAV_STACK")
         if "site_file:=${AUTO_SCOUT_SITE_CONFIG}" not in compose_text:
             container_issues.append("companion-runtime must launch with AUTO_SCOUT_SITE_CONFIG")
         if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in compose_text:
@@ -765,14 +805,20 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         companion_start_text = companion_start_path.read_text(encoding="utf-8")
         if 'require_env AUTO_SCOUT_ROS_MASTER_URI' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must fail fast when AUTO_SCOUT_ROS_MASTER_URI is unset")
-        if 'require_env AUTO_SCOUT_ROS_HOSTNAME' not in companion_start_text:
-            container_issues.append("scripts/start_companion_stack.sh must fail fast when AUTO_SCOUT_ROS_HOSTNAME is unset")
+        if "require_ros_advertise_env" not in companion_start_text:
+            container_issues.append(
+                "scripts/start_companion_stack.sh must fail fast unless exactly one ROS advertise environment is set"
+            )
         if 'AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_LOCALIZATION_MODE with a mapping-safe default")
+        if 'AUTO_SCOUT_ENABLE_NAV_STACK="${AUTO_SCOUT_ENABLE_NAV_STACK:-false}"' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_ENABLE_NAV_STACK with a no-LD19-safe default")
         if 'AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must export AUTO_SCOUT_ODOM_MODEL_TYPE with a diff-safe default")
         if 'AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"' not in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must default ROS logs under AUTO_SCOUT_STORAGE_ROOT")
+        if 'AUTO_SCOUT_SITE_CONFIG="${AUTO_SCOUT_SITE_CONFIG:-${CONTAINER_SITE_CONFIG}}"' not in companion_start_text:
+            container_issues.append("scripts/start_companion_stack.sh must pass the container-visible site path into ROS launch")
         if 'AUTO_SCOUT_ROS_MASTER_URI="${AUTO_SCOUT_ROS_MASTER_URI:-http://moorebot-scout.local:11311}"' in companion_start_text:
             container_issues.append("scripts/start_companion_stack.sh must not silently default ROS master settings to moorebot-scout.local")
 
@@ -783,6 +829,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             container_issues.append("container/.env.example must document AUTO_SCOUT_ODOM_MODEL_TYPE=diff")
         if "AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs" not in env_example_text:
             container_issues.append("container/.env.example must document AUTO_SCOUT_ROS_LOG_DIR")
+        if "AUTO_SCOUT_ENABLE_NAV_STACK=false" not in env_example_text:
+            container_issues.append("container/.env.example must document AUTO_SCOUT_ENABLE_NAV_STACK=false")
 
     if dockerfile_path.is_file():
         dockerfile_text = dockerfile_path.read_text(encoding="utf-8")
@@ -829,6 +877,14 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             deploy_issues.append("src/auto_scout/deploy.py must fail fast when ROS endpoint settings are absent")
         if "AUTO_SCOUT_ODOM_MODEL_TYPE" not in deploy_text:
             deploy_issues.append("src/auto_scout/deploy.py must render AUTO_SCOUT_ODOM_MODEL_TYPE for companion-runtime")
+        if "AUTO_SCOUT_ENABLE_LIDAR=false" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must render AUTO_SCOUT_ENABLE_LIDAR=false for the Scout no-LD19 holding mode")
+        if "AUTO_SCOUT_ENABLE_NAV_STACK=false" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must render AUTO_SCOUT_ENABLE_NAV_STACK=false for the companion no-LD19 holding mode")
+        if "COMPANION_CONTAINER_WORKSPACE" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must render companion site/config paths in the container namespace")
+        if "SCOUT_SWAP_PATH" not in deploy_text or "SCOUT_SWAP_UNIT" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must install the persistent Scout swap setup and swap units")
 
     if deploy_issues:
         report.add(
@@ -1324,19 +1380,24 @@ def _add_live_probe_check(
         )
         return
 
+    mismatch_prefixes = [
+        "roles.scout.capabilities.pose",
+        "roles.scout.capabilities.motion",
+        "roles.scout.topics.odom",
+        "roles.scout.topics.vendor_cmd_vel",
+        "roles.scout.ros.master_uri",
+        "roles.scout.ros.advertise_host",
+    ]
+    if _lidar_runtime_enabled():
+        mismatch_prefixes.append("roles.scout.devices.lidar")
+
     mismatch_items = _probe_mismatch_items(
         probe_result,
-        [
-            "roles.scout.capabilities.pose",
-            "roles.scout.capabilities.motion",
-            "roles.scout.devices.lidar",
-            "roles.scout.topics.odom",
-            "roles.scout.topics.vendor_cmd_vel",
-            "roles.scout.ros.master_uri",
-            "roles.scout.ros.advertise_host",
-        ],
+        mismatch_prefixes,
     )
     details = []
+    if not _lidar_runtime_enabled():
+        details.append("LiDAR scan validation is intentionally disabled while the LD19 is detached.")
     observed_motion = probe_result.get("observed", {}).get("motion_observation")
     if observe_motion and observed_motion and not observed_motion.get("moved", False):
         details.append("Observed odometry did not change during the motion observation window.")
@@ -1432,6 +1493,16 @@ def _add_scout_serial_access_check(report, site_config, runtime_profile, live_pr
     scout = role_config(site_config, "scout")
     lidar_path = scout.get("devices", {}).get("lidar")
     service_user, service_group = role_service_identity(scout)
+
+    if not _lidar_runtime_enabled():
+        report.add(
+            "runtime.scout_serial_access",
+            "skip",
+            "Scout LiDAR runtime is intentionally disabled while the LD19 is detached",
+            details=["Set AUTO_SCOUT_ENABLE_LIDAR=true after the LD19 mount/harness is installed."],
+            evidence={"configured_lidar": lidar_path, "service_user": service_user, "service_group": service_group},
+        )
+        return
 
     if not live_probe_enabled:
         report.add(
@@ -1539,13 +1610,14 @@ def _add_scout_checks(report, site_config, runtime_profile):
     devices = scout.get("devices", {})
     topics = scout.get("topics", {})
     ros_settings = scout.get("ros", {})
+    lidar_enabled = _lidar_runtime_enabled()
 
     issues = []
     if not capabilities.get("vendor_bridge", False):
         issues.append("scout.capabilities.vendor_bridge must be true")
     if not capabilities.get("camera", False):
         issues.append("scout.capabilities.camera must be true")
-    if not capabilities.get("scan", False):
+    if lidar_enabled and not capabilities.get("scan", False):
         issues.append("scout.capabilities.scan must be true")
     if not capabilities.get("tof", False):
         issues.append("scout.capabilities.tof must be true")
@@ -1554,7 +1626,8 @@ def _add_scout_checks(report, site_config, runtime_profile):
     if not capabilities.get("motion", False):
         issues.append("scout.capabilities.motion must be true")
 
-    for name in ["camera", "lidar"]:
+    required_devices = ["camera"] + (["lidar"] if lidar_enabled else [])
+    for name in required_devices:
         if name not in devices:
             issues.append("scout.devices.{} is missing".format(name))
     for name in [
@@ -1591,7 +1664,10 @@ def _add_scout_checks(report, site_config, runtime_profile):
     details = issues
 
     if not issues and runtime_profile == "likely_scout":
-        missing_local = [path for path in devices.values() if not Path(path).exists()]
+        checked_devices = [devices.get("camera")]
+        if lidar_enabled:
+            checked_devices.append(devices.get("lidar"))
+        missing_local = [path for path in checked_devices if path and not Path(path).exists()]
         if missing_local:
             status = "fail"
             summary = "Scout host is missing required device nodes"
@@ -1604,6 +1680,11 @@ def _add_scout_checks(report, site_config, runtime_profile):
         status = "warn"
         summary = "Scout capability declarations look correct, but live hardware was not validated locally"
 
+    if not issues and not lidar_enabled and status == "pass":
+        summary = "Scout readiness is valid for no-LD19 holding mode"
+    elif not issues and not lidar_enabled and status == "warn":
+        summary = "Scout inventory is valid for no-LD19 holding mode, but live hardware was not validated locally"
+
     report.add(
         "runtime.scout_readiness",
         status,
@@ -1612,6 +1693,7 @@ def _add_scout_checks(report, site_config, runtime_profile):
         evidence={
             "devices": devices,
             "capabilities": capabilities,
+            "lidar_runtime_enabled": lidar_enabled,
             "topics": topics,
             "ros": ros_settings,
         },
@@ -1752,9 +1834,93 @@ def _add_resource_check(report):
     )
 
 
+def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_probe_enabled):
+    if not live_probe_enabled:
+        report.add(
+            "runtime.scout_memory_pressure",
+            "skip",
+            "Scout memory-pressure probing is disabled",
+        )
+        return
+
+    scout = role_config(site_config, "scout")
+    executor = ProbeExecutor(scout, force_remote=runtime_profile != "likely_scout")
+    command = (
+        "echo __FREE__; free -m || true; "
+        "echo __SWAPS__; cat /proc/swaps || true; "
+        "echo __OOM__; "
+        "{ sudo -n journalctl -k --since '24 hours ago' --no-pager 2>/dev/null "
+        "|| journalctl -k --since '24 hours ago' --no-pager 2>/dev/null "
+        "|| dmesg 2>/dev/null "
+        "|| true; "
+        "sudo -n journalctl --since '24 hours ago' --no-pager "
+        "-u auto-scout-scout-runtime.service "
+        "-u auto-scout-scout-swap-setup.service "
+        "-u 'userdata-auto\\\\x2dscout-auto\\\\x2dscout.swap.swap' "
+        "2>/dev/null || true; "
+        "} | grep -E 'Out of memory|oom-killer|Killed process|exit code -9' || true"
+    )
+    result = executor.run(command, check=False)
+    if not result.ok:
+        report.add(
+            "runtime.scout_memory_pressure",
+            "warn",
+            "Could not inspect Scout memory pressure",
+            details=[result.stderr or result.stdout],
+        )
+        return
+
+    output = result.stdout or ""
+    swap_active = "/userdata/auto-scout/auto-scout.swap" in output
+    oom_lines = [
+        line.strip()
+        for line in output.splitlines()
+        if any(
+            marker in line
+            for marker in ["Out of memory", "oom-killer", "Killed process", "exit code -9"]
+        )
+    ]
+    details = []
+    sections = output.split("__OOM__", 1)
+    snapshot = sections[0].strip()
+    if snapshot:
+        details.append(snapshot)
+    if oom_lines:
+        details.extend(oom_lines)
+
+    if oom_lines:
+        report.add(
+            "runtime.scout_memory_pressure",
+            "fail",
+            "Scout kernel or service logs show recent OOM/process-kill activity",
+            details=details,
+            evidence={"swap_active": swap_active},
+        )
+        return
+
+    if not swap_active:
+        report.add(
+            "runtime.scout_memory_pressure",
+            "fail",
+            "Scout swap file is not active",
+            details=details + ["Expected /userdata/auto-scout/auto-scout.swap in /proc/swaps."],
+            evidence={"swap_active": swap_active},
+        )
+        return
+
+    report.add(
+        "runtime.scout_memory_pressure",
+        "pass",
+        "Scout swap is active and no recent OOM kills were found",
+        details=details,
+        evidence={"swap_active": swap_active},
+    )
+
+
 def _add_mission_checks(report, site_config):
     smoke_mission, mission_path = load_mission_config("smoke_loop")
     gate = evaluate_smoke_loop_gate(site_config, smoke_mission)
+    nav_stack_enabled = _nav_stack_enabled()
 
     mapping_issues = []
     system_caps = {
@@ -1777,7 +1943,14 @@ def _add_mission_checks(report, site_config):
     if not system_caps.get("motion", False):
         patrol_issues.append("Motion capability is required for autonomous patrol")
 
-    if mapping_issues:
+    if not nav_stack_enabled:
+        report.add(
+            "runtime.mission_house_mapping",
+            "skip",
+            "House mapping is intentionally disabled while the LD19 is detached",
+            details=["Set AUTO_SCOUT_ENABLE_NAV_STACK=true after /scan is restored."],
+        )
+    elif mapping_issues:
         report.add(
             "runtime.mission_house_mapping",
             "fail",
@@ -1791,7 +1964,14 @@ def _add_mission_checks(report, site_config):
             "House mapping prerequisites are declared",
         )
 
-    if patrol_issues:
+    if not nav_stack_enabled:
+        report.add(
+            "runtime.mission_room_patrol",
+            "skip",
+            "Room patrol is intentionally disabled while the LD19 is detached",
+            details=["Set AUTO_SCOUT_ENABLE_NAV_STACK=true after /scan and localization are restored."],
+        )
+    elif patrol_issues:
         report.add(
             "runtime.mission_room_patrol",
             "fail",
@@ -1807,7 +1987,10 @@ def _add_mission_checks(report, site_config):
 
     smoke_status = "pass"
     smoke_summary = "Smoke-loop mission gate is satisfied"
-    if not gate["ok"]:
+    if not nav_stack_enabled:
+        smoke_status = "skip"
+        smoke_summary = "Smoke-loop mission is intentionally disabled while the LD19/nav stack is off"
+    elif not gate["ok"]:
         smoke_status = "fail"
         smoke_summary = "Smoke-loop mission is blocked by missing capabilities"
     elif not role_config(site_config, "scout").get("capabilities", {}).get("dock", False):
@@ -1845,6 +2028,7 @@ def add_runtime_checks(
         _add_scout_checks(report, site_config, runtime_profile)
         _add_scout_peer_hostname_resolution_check(report, site_config, runtime_profile, live_probe_enabled)
         _add_scout_serial_access_check(report, site_config, runtime_profile, live_probe_enabled)
+        _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_probe_enabled)
 
     if effective_role in ["companion", "system"]:
         _add_companion_checks(report, site_config, runtime_profile, effective_role)

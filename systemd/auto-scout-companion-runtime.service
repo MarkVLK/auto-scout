@@ -12,9 +12,12 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/auto-scout
 Environment=AUTO_SCOUT_ROS_MASTER_URI=http://scout-host-or-ip.invalid:11311
-Environment=AUTO_SCOUT_ROS_HOSTNAME=companion-host-or-ip.invalid
-Environment=AUTO_SCOUT_SITE_CONFIG=/opt/auto-scout/config/site_local.yaml
+# Set exactly one ROS advertise variable. Use AUTO_SCOUT_ROS_IP for static IP deployments.
+Environment=AUTO_SCOUT_ROS_HOSTNAME=companion-host.invalid
+#Environment=AUTO_SCOUT_ROS_IP=192.0.2.20
+Environment=AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml
 Environment=AUTO_SCOUT_ODOM_MODEL_TYPE=diff
+Environment=AUTO_SCOUT_ENABLE_NAV_STACK=false
 Environment=AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs
 ExecStart=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh up'
 ExecStop=/bin/bash -lc '/opt/auto-scout/scripts/start_companion_stack.sh down'

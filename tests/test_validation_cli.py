@@ -24,9 +24,12 @@ from auto_scout import cli
 from auto_scout import mission_runner
 from check_scout_compatibility import find_local_markdown_link_targets
 from auto_scout.deploy import _render_companion_service
+from auto_scout.deploy import _install_swap_commands
 from auto_scout.deploy import _render_ros_log_cleanup_service
 from auto_scout.deploy import _render_ros_log_cleanup_timer
 from auto_scout.deploy import _render_scout_service
+from auto_scout.deploy import _render_scout_swap_setup_service
+from auto_scout.deploy import _render_scout_swap_unit
 from auto_scout.deploy import _copy_site_inventory_to_remote
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
@@ -483,6 +486,32 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(pose_gate["status"], "pass")
         self.assertIn("Declared pose provider", pose_gate["details"][0])
 
+    def test_no_lidar_runtime_mode_reports_intentional_holding_state(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ros"]["advertise_host"] = "moorebot-scout.local"
+        report = validator.ReportBuilder("runtime", "operator_host", "system")
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AUTO_SCOUT_ENABLE_LIDAR": "false",
+                "AUTO_SCOUT_ENABLE_NAV_STACK": "false",
+            },
+        ):
+            validator._add_scout_checks(report, site_config, "operator_host")
+            validator._add_scout_serial_access_check(report, site_config, "operator_host", live_probe_enabled=True)
+            validator._add_mission_checks(report, site_config)
+            payload = report.build()
+
+        checks = {item["name"]: item for item in payload["checks"]}
+        self.assertEqual(checks["runtime.scout_readiness"]["status"], "warn")
+        self.assertIn("no-LD19 holding mode", checks["runtime.scout_readiness"]["summary"])
+        self.assertFalse(checks["runtime.scout_readiness"]["evidence"]["lidar_runtime_enabled"])
+        self.assertEqual(checks["runtime.scout_serial_access"]["status"], "skip")
+        self.assertEqual(checks["runtime.mission_house_mapping"]["status"], "skip")
+        self.assertEqual(checks["runtime.mission_room_patrol"]["status"], "skip")
+        self.assertEqual(checks["runtime.mission_smoke_loop"]["status"], "skip")
+
     def test_default_site_config_uses_diff_drive_model_and_placeholder_hosts(self):
         site_config = default_site_config()
         scout = site_config["roles"]["scout"]
@@ -542,6 +571,18 @@ class ValidationCliTest(unittest.TestCase):
 
         self.assertFalse(gate["ok"])
         self.assertTrue(any("webhook_url is empty" in issue for issue in gate["issues"]))
+
+    def test_smoke_loop_gate_fails_when_nav_stack_disabled(self):
+        site_config = default_site_config()
+        site_config["roles"]["companion"]["capabilities"]["notify"] = True
+        site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+        mission_config, _ = load_mission_config("smoke_loop")
+
+        gate = evaluate_smoke_loop_gate(site_config, mission_config, nav_stack_enabled=False)
+
+        self.assertFalse(gate["ok"])
+        self.assertFalse(gate["nav_stack_enabled"])
+        self.assertTrue(any("AUTO_SCOUT_ENABLE_NAV_STACK is false" in issue for issue in gate["issues"]))
 
     def test_system_validation_checks_companion_readiness_remotely_when_not_on_companion(self):
         site_config = default_site_config()
@@ -696,6 +737,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs", scout_service)
         self.assertIn("Environment=ROS_OS_OVERRIDE=debian:stretch", scout_service)
         self.assertIn("Environment=AUTO_SCOUT_ENABLE_CAMERA=false", scout_service)
+        self.assertIn("Environment=AUTO_SCOUT_ENABLE_LIDAR=false", scout_service)
         self.assertIn(
             "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
                 site_config["roles"]["scout"]["workspace_dir"]
@@ -705,13 +747,27 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("Environment=AUTO_SCOUT_ROS_MASTER_URI=http://moorebot-scout.local:11311", companion_service)
         self.assertIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=auto-scout-pi5.local", companion_service)
         self.assertIn("Environment=AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs", companion_service)
+        self.assertIn("Environment=AUTO_SCOUT_ENABLE_NAV_STACK=false", companion_service)
         self.assertIn(
-            "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
-                site_config["roles"]["companion"]["workspace_dir"]
-            ),
+            "Environment=AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml",
             companion_service,
         )
         self.assertIn("Environment=AUTO_SCOUT_ODOM_MODEL_TYPE=omni", companion_service)
+
+    def test_rendered_services_use_ros_ip_for_ip_advertise_addresses(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
+        site_config["roles"]["scout"]["ros"]["advertise_host"] = "192.168.0.199"
+        site_config["roles"]["companion"]["ros"]["master_uri"] = "http://192.168.0.199:11311"
+        site_config["roles"]["companion"]["ros"]["advertise_host"] = "192.168.0.87"
+
+        scout_service = _render_scout_service(site_config["roles"]["scout"])
+        companion_service = _render_companion_service(site_config["roles"]["companion"], site_config["roles"]["scout"])
+
+        self.assertIn("Environment=ROS_IP=192.168.0.199", scout_service)
+        self.assertNotIn("Environment=ROS_HOSTNAME=192.168.0.199", scout_service)
+        self.assertIn("Environment=AUTO_SCOUT_ROS_IP=192.168.0.87", companion_service)
+        self.assertNotIn("Environment=AUTO_SCOUT_ROS_HOSTNAME=192.168.0.87", companion_service)
 
     def test_rendered_ros_log_cleanup_units_bound_age_and_size(self):
         service_text = _render_ros_log_cleanup_service(
@@ -734,6 +790,28 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("OnBootSec=5min", timer_text)
         self.assertIn("OnUnitActiveSec=1d", timer_text)
         self.assertIn("Persistent=true", timer_text)
+
+    def test_rendered_scout_swap_units_prepare_persistent_swap(self):
+        setup_text = _render_scout_swap_setup_service()
+        swap_text = _render_scout_swap_unit()
+        install_commands = "\n".join(_install_swap_commands("/tmp/setup.service", "/tmp/swap.swap"))
+
+        self.assertIn("RequiresMountsFor=/userdata", setup_text)
+        self.assertIn("Before=userdata-auto\\x2dscout-auto\\x2dscout.swap.swap", setup_text)
+        self.assertIn("mkdir -p \"$(dirname \"/userdata/auto-scout/auto-scout.swap\")\"", setup_text)
+        self.assertIn("fallocate -l 512M \"/userdata/auto-scout/auto-scout.swap\"", setup_text)
+        self.assertIn("chmod 600 \"/userdata/auto-scout/auto-scout.swap\"", setup_text)
+        self.assertIn("/sbin/mkswap \"/userdata/auto-scout/auto-scout.swap\"", setup_text)
+        self.assertIn("Requires=auto-scout-scout-swap-setup.service", swap_text)
+        self.assertIn("What=/userdata/auto-scout/auto-scout.swap", swap_text)
+        self.assertIn("WantedBy=swap.target", swap_text)
+        self.assertIn("sudo systemctl enable 'userdata-auto\\x2dscout-auto\\x2dscout.swap.swap'", install_commands)
+        self.assertIn("sudo systemctl start 'userdata-auto\\x2dscout-auto\\x2dscout.swap.swap'", install_commands)
+        self.assertIn("sudo systemctl start auto-scout-scout-swap-setup.service", install_commands)
+        self.assertNotIn("enable auto-scout-scout-swap-setup.service", install_commands)
+        self.assertIn("grep -Fqw '/userdata/auto-scout/auto-scout.swap' /proc/swaps", install_commands)
+        self.assertIn("stat -c '%a' '/userdata/auto-scout/auto-scout.swap'", install_commands)
+        self.assertIn("/sbin/blkid -o value -s TYPE '/userdata/auto-scout/auto-scout.swap'", install_commands)
 
     def test_service_rendering_fails_fast_on_placeholder_ros_endpoints(self):
         site_config = default_site_config()
@@ -763,30 +841,49 @@ class ValidationCliTest(unittest.TestCase):
         scout_start_script = (REPO_ROOT / "scripts" / "start_scout_runtime.sh").read_text(encoding="utf-8")
         known_hosts_script = (REPO_ROOT / "scripts" / "provision_pi_known_hosts.sh").read_text(encoding="utf-8")
         companion_launch = (REPO_ROOT / "launch" / "companion_runtime.launch").read_text(encoding="utf-8")
+        scout_runtime_launch = (REPO_ROOT / "launch" / "scout_runtime.launch").read_text(encoding="utf-8")
         navigation_launch = (REPO_ROOT / "launch" / "navigation.launch").read_text(encoding="utf-8")
         env_example = (REPO_ROOT / "container" / ".env.example").read_text(encoding="utf-8")
 
         self.assertIn("localization_mode:=${AUTO_SCOUT_LOCALIZATION_MODE:-false}", compose_text)
         self.assertIn("AUTO_SCOUT_SITE_CONFIG: ${AUTO_SCOUT_SITE_CONFIG}", compose_text)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE: ${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}", compose_text)
+        self.assertIn("AUTO_SCOUT_ENABLE_NAV_STACK: ${AUTO_SCOUT_ENABLE_NAV_STACK:-false}", compose_text)
         self.assertIn("ROS_LOG_DIR: ${AUTO_SCOUT_ROS_LOG_DIR:-/srv/auto-scout/ros-logs}", compose_text)
+        self.assertIn("ROS_HOSTNAME: ${AUTO_SCOUT_ROS_HOSTNAME:-}", compose_text)
+        self.assertIn("ROS_IP: ${AUTO_SCOUT_ROS_IP:-}", compose_text)
+        self.assertIn('if [ -z "$${ROS_HOSTNAME:-}" ]; then unset ROS_HOSTNAME; fi', compose_text)
+        self.assertIn('if [ -z "$${ROS_IP:-}" ]; then unset ROS_IP; fi', compose_text)
+        self.assertIn("enable_nav_stack:=${AUTO_SCOUT_ENABLE_NAV_STACK:-false}", compose_text)
         self.assertIn("/run/avahi-daemon/socket:/run/avahi-daemon/socket", compose_text)
         self.assertIn("/run/dbus/system_bus_socket:/run/dbus/system_bus_socket", compose_text)
         self.assertIn("source /opt/catkin_ws/devel/setup.bash", compose_text)
-        self.assertIn('AUTO_SCOUT_SITE_CONFIG="${AUTO_SCOUT_SITE_CONFIG:-${DEFAULT_SITE_CONFIG}}"', start_script)
+        self.assertIn('CONTAINER_WORKSPACE="/opt/catkin_ws/src/auto-scout"', start_script)
+        self.assertIn('AUTO_SCOUT_SITE_CONFIG="${AUTO_SCOUT_SITE_CONFIG:-${CONTAINER_SITE_CONFIG}}"', start_script)
         self.assertIn("export AUTO_SCOUT_SITE_CONFIG", start_script)
         self.assertIn('AUTO_SCOUT_LOCALIZATION_MODE="${AUTO_SCOUT_LOCALIZATION_MODE:-false}"', start_script)
+        self.assertIn('AUTO_SCOUT_ENABLE_NAV_STACK="${AUTO_SCOUT_ENABLE_NAV_STACK:-false}"', start_script)
+        self.assertIn("export AUTO_SCOUT_ENABLE_NAV_STACK", start_script)
         self.assertIn('AUTO_SCOUT_ODOM_MODEL_TYPE="${AUTO_SCOUT_ODOM_MODEL_TYPE:-diff}"', start_script)
         self.assertIn('AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"', start_script)
         self.assertIn("export AUTO_SCOUT_ROS_LOG_DIR", start_script)
         self.assertIn('export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"', scout_start_script)
         self.assertIn('CAMERA_ENABLED="${AUTO_SCOUT_ENABLE_CAMERA:-false}"', scout_start_script)
+        self.assertIn('LIDAR_ENABLED="${AUTO_SCOUT_ENABLE_LIDAR:-false}"', scout_start_script)
         self.assertIn('enable_camera:="${CAMERA_ENABLED}"', scout_start_script)
+        self.assertIn('enable_lidar:="${LIDAR_ENABLED}"', scout_start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
-        self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
+        self.assertIn("require_ros_advertise_env", start_script)
+        self.assertIn("AUTO_SCOUT_ROS_HOSTNAME or AUTO_SCOUT_ROS_IP must be set", start_script)
+        self.assertIn("Set only one of AUTO_SCOUT_ROS_HOSTNAME or AUTO_SCOUT_ROS_IP", start_script)
+        self.assertIn('export AUTO_SCOUT_ROS_IP="${AUTO_SCOUT_ROS_IP:-}"', start_script)
         self.assertNotIn("moorebot-scout.local", start_script)
         self.assertIn('<arg name="site_file" default="$(find auto-scout)/config/site.yaml" />', companion_launch)
         self.assertIn('<arg name="localization_mode" default="false" />', companion_launch)
+        self.assertIn('<arg name="enable_nav_stack" default="false" />', companion_launch)
+        self.assertIn('<group if="$(arg enable_nav_stack)">', companion_launch)
+        self.assertIn('<arg name="enable_lidar" default="false" />', scout_runtime_launch)
+        self.assertIn('if="$(arg enable_lidar)"', scout_runtime_launch)
         self.assertIn('name="battery_map_return_controller"', companion_launch)
         self.assertIn('name="vendor_jpg_bridge"', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)
@@ -798,6 +895,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("AUTO_SCOUT_SITE_CONFIG=/opt/catkin_ws/src/auto-scout/config/site_local.yaml", env_example)
         self.assertIn("AUTO_SCOUT_ODOM_MODEL_TYPE=diff", env_example)
         self.assertIn("AUTO_SCOUT_ROS_LOG_DIR=/srv/auto-scout/ros-logs", env_example)
+        self.assertIn("AUTO_SCOUT_ENABLE_NAV_STACK=false", env_example)
         self.assertIn("ssh-keyscan -H", known_hosts_script)
         self.assertIn("moorebot-scout.local", known_hosts_script)
         self.assertIn("auto-scout-pi5.local", known_hosts_script)
@@ -860,13 +958,14 @@ class ValidationCliTest(unittest.TestCase):
 
         artifact_run = FakeArtifactRun()
         with patch.object(mission_runner, "CommandRunner", FakeRunner):
-            result = mission_runner.run_smoke_loop(
-                site_config,
-                str(REPO_ROOT / "config" / "site_local.yaml"),
-                mission_config,
-                mission_path,
-                artifact_run,
-            )
+            with patch.dict("os.environ", {"AUTO_SCOUT_ENABLE_NAV_STACK": "true"}):
+                result = mission_runner.run_smoke_loop(
+                    site_config,
+                    str(REPO_ROOT / "config" / "site_local.yaml"),
+                    mission_config,
+                    mission_path,
+                    artifact_run,
+                )
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["phase"], "preflight")
