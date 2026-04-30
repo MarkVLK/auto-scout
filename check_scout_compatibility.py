@@ -451,6 +451,8 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         "tof_range",
         "scout_imu",
         "imu_data",
+        "camera_compressed",
+        "vendor_camera_jpg",
         "planner_cmd_vel",
         "autonomy_cmd_vel",
         "safety_state",
@@ -1366,6 +1368,8 @@ def _add_live_probe_check(
 
     observed_topics = probe_result.get("observed", {}).get("topics", {})
     for label, topic_key in [
+        ("Camera compressed", "camera_compressed"),
+        ("Vendor JPG camera", "vendor_camera_jpg"),
         ("ToF source", "scout_tof"),
         ("ToF normalized", "tof_range"),
         ("IMU source", "scout_imu"),
@@ -1564,6 +1568,8 @@ def _add_scout_checks(report, site_config, runtime_profile):
         "battery_guard_control",
         "vendor_dock_status",
         "runtime_request",
+        "camera_compressed",
+        "vendor_camera_jpg",
         "scout_tof",
         "tof_range",
         "scout_imu",

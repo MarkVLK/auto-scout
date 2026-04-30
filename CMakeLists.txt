@@ -77,6 +77,7 @@ catkin_install_python(PROGRAMS
   src/battery_map_return_controller.py
   src/scout_motion_bridge.py
   src/scout_odom_bridge.py
+  src/vendor_jpg_bridge.py
   src/dog_detection_module.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

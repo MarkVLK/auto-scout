@@ -25,6 +25,7 @@ storage:
 topics:
   lidar_scan: "/scan"
   camera_compressed: "/camera/image_raw/compressed"
+  vendor_camera_jpg: "/CoreNode/jpg"
   odom: "/MotorNode/baselink_odom_relative"
   vendor_cmd_vel: "/cmd_vel_force"
   planner_cmd_vel: "/scout/cmd_vel_planner"

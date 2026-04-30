@@ -295,10 +295,10 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- VERIFIED_ARCHITECTURE.md        # Verified hardware/software facts and the design conclusions derived from them.
 |   `-- setup_guide.md                  # End-to-end Moorebot Scout plus LD19 companion setup guide.
 |-- launch/                             # ROS launch entrypoints for Scout and companion roles.
-|   |-- companion_runtime.launch        # Selects mapping or localization mode and starts the companion heartbeat plus battery map-return controller.
+|   |-- companion_runtime.launch        # Selects mapping or localization mode and starts companion heartbeat, vendor JPG camera, and battery map-return nodes.
 |   |-- navigation.launch               # Companion localization plus `move_base` stack for saved-map patrols.
 |   |-- scout_complete.launch           # Combined bring-up wrapper for optional local Scout bridge plus companion runtime.
-|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, lidar, camera, ToF, IMU, battery guard, safety, odom, and motion nodes.
+|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, lidar, optional direct camera, ToF, IMU, battery guard, safety, odom, and motion nodes.
 |   `-- slam_mapping.launch             # Companion-side gmapping stack with robot model and transforms.
 |-- legacy/                             # Quarantined browser and voice surfaces that are no longer on the supported path.
 |   |-- README.md                       # Explains what was retired and where the supported interfaces now live.
@@ -322,7 +322,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- ld19_lidar_driver.py            # ROS driver that reads LD19 packets and publishes `sensor_msgs/LaserScan`.
 |   |-- ld19_protocol.py                # Reusable LD19 packet parsing and scan assembly helpers.
 |   |-- map_file_guard.py               # Fails localization launch early when the configured map file is missing.
-|   |-- scout_camera_driver.py          # Lightweight compressed-image camera bridge for the Scout runtime.
+|   |-- scout_camera_driver.py          # Opt-in direct `/dev/video0` compressed-image camera fallback for the Scout runtime.
 |   |-- scout_battery_dock_guard.py     # Scout-local low-battery guard and vendor `/nav_low_bat` docking handoff.
 |   |-- scout_imu_bridge.py             # Normalize the vendor IMU topic to `/scout/imu/data`.
 |   |-- scout_motion_bridge.py          # Republish standard autonomy `Twist` commands onto the vendor motion topic.
@@ -330,6 +330,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- scout_odom_bridge.py            # Normalize vendor odometry into `/odom` plus TF.
 |   |-- scout_runtime_agent.py          # Python 2 Scout runtime heartbeat publisher.
 |   |-- scout_runtime_config.py         # Python 2-safe site/config loader for Scout-launched nodes.
+|   |-- vendor_jpg_bridge.py            # Companion adapter from vendor `/CoreNode/jpg` frames to standard compressed images.
 |   |-- scout_safety_filter.py          # Gate planner velocity commands using ToF, LiDAR heartbeat, and battery guard state.
 |   |-- scout_tof_bridge.py             # Normalize the vendor ToF range topic to `/scout/tof`.
 |   |-- scout_web_interface.py          # Explicit stub that exits and points users at the retired legacy dashboard.

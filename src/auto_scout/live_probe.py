@@ -2,6 +2,7 @@
 
 import csv
 import io
+import json
 import math
 import os
 import re
@@ -26,6 +27,7 @@ DEFAULT_OBSERVE_MOTION_SECONDS = 0.0
 TOPIC_CANDIDATES = {
     "lidar_scan": ["/scan"],
     "camera_compressed": ["/camera/image_raw/compressed"],
+    "vendor_camera_jpg": ["/CoreNode/jpg"],
     "scout_tof": ["/SensorNode/tof"],
     "tof_range": ["/scout/tof"],
     "scout_imu": ["/SensorNode/imu"],
@@ -43,6 +45,7 @@ TOPIC_CANDIDATES = {
 TOPIC_TYPES = {
     "lidar_scan": "sensor_msgs/LaserScan",
     "camera_compressed": "sensor_msgs/CompressedImage",
+    "vendor_camera_jpg": "roller_eye/frame",
     "scout_tof": "sensor_msgs/Range",
     "tof_range": "sensor_msgs/Range",
     "scout_imu": "sensor_msgs/Imu",
@@ -60,7 +63,7 @@ TOPIC_TYPES = {
 SENSOR_TOPIC_KEYS = ["scout_tof", "tof_range", "scout_imu", "imu_data"]
 COMMAND_TOPIC_KEYS = ["vendor_cmd_vel", "planner_cmd_vel", "autonomy_cmd_vel", "safety_state"]
 BATTERY_TOPIC_KEYS = ["battery_status", "battery_guard_state", "vendor_dock_status"]
-PROBE_TOPIC_KEYS = ["lidar_scan", "camera_compressed", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS
+PROBE_TOPIC_KEYS = ["lidar_scan", "camera_compressed", "vendor_camera_jpg", "odom"] + COMMAND_TOPIC_KEYS + SENSOR_TOPIC_KEYS + BATTERY_TOPIC_KEYS
 REQUIRED_DYNAMIC_TF_EDGES = [("odom", "base_link")]
 REQUIRED_STATIC_TF_EDGES = [("base_link", "base_laser")]
 REQUIRED_TF_EDGES = REQUIRED_DYNAMIC_TF_EDGES + REQUIRED_STATIC_TF_EDGES
@@ -92,6 +95,7 @@ SERVICE_LIST_TIMEOUT_SECONDS = 8
 SERVICE_TYPE_TIMEOUT_SECONDS = 5
 COMMAND_EXERCISE_TIMEOUT_BUDGET_SECONDS = 8
 TF_SAMPLE_TIMEOUT_SECONDS = 5
+MAX_CAMERA_SAMPLE_CHARS = 4000
 
 
 def _format_seconds(seconds):
@@ -222,6 +226,13 @@ def _parse_topic_info(text):
     return payload
 
 
+def _trim_large_sample(text, max_chars=MAX_CAMERA_SAMPLE_CHARS):
+    if not text or len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return "{}\n...[truncated {} chars]".format(text[:max_chars].rstrip(), omitted)
+
+
 def _parse_odom_snapshot(text):
     payload = {
         "frame_id": None,
@@ -257,6 +268,56 @@ def _parse_tf_edges(text):
             if edge not in edges:
                 edges.append(edge)
     return edges
+
+
+def _tf_collection_command(topic_name, timeout_seconds):
+    code = """
+import json
+import rospy
+from tf2_msgs.msg import TFMessage
+
+topic = {topic!r}
+timeout_seconds = {timeout_seconds!r}
+edges = set()
+sample_edges = []
+message_count = [0]
+
+def callback(message):
+    message_count[0] += 1
+    for transform in message.transforms:
+        parent = transform.header.frame_id
+        child = transform.child_frame_id
+        edges.add((parent, child))
+        if len(sample_edges) < 20:
+            sample_edges.append({{"parent": parent, "child": child}})
+
+rospy.init_node("auto_scout_tf_probe", anonymous=True, disable_signals=True)
+subscriber = rospy.Subscriber(topic, TFMessage, callback)
+rospy.sleep(timeout_seconds)
+print(json.dumps({{
+    "count": message_count[0],
+    "edges": [{{"parent": parent, "child": child}} for parent, child in sorted(edges)],
+    "sample_edges": sample_edges,
+}}, sort_keys=True))
+""".format(
+        topic=topic_name,
+        timeout_seconds=float(timeout_seconds),
+    )
+    return "timeout {}s python2 -c {}".format(int(timeout_seconds) + 5, shlex.quote(code))
+
+
+def _parse_tf_collection_output(text):
+    for raw_line in reversed((text or "").splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 
 def _edge_tuple(edge):
@@ -355,6 +416,35 @@ class ProbeExecutor:
 
         ssh = self.role_settings.get("ssh", {})
         return self.runner.run_remote(ssh, command, check=check)
+
+
+class CompanionContainerProbeExecutor:
+    """Run ROS probe commands inside the companion navigation container."""
+
+    def __init__(self, role_settings, runner=None):
+        self.role_settings = role_settings
+        self.runner = runner or CommandRunner()
+
+    def run(self, body, check=False):
+        ros = self.role_settings.get("ros", {}) if isinstance(self.role_settings.get("ros", {}), dict) else {}
+        container_name = ros.get("container_name", "auto-scout-melodic")
+        inner = "{}; if [ -f /opt/catkin_ws/devel/setup.bash ]; then . /opt/catkin_ws/devel/setup.bash; fi; {}".format(
+            _ros_shell_prefix(self.role_settings),
+            body,
+        )
+        remote_command = "docker exec {} /bin/bash -lc {}".format(
+            shlex.quote(container_name),
+            shlex.quote(inner),
+        )
+        return self.runner.run_remote(self.role_settings.get("ssh", {}), remote_command, check=check)
+
+
+def _tf_probe_executor(site_config, fallback_executor, runner=None):
+    companion = role_config(site_config, "companion")
+    ros = companion.get("ros", {}) if isinstance(companion.get("ros", {}), dict) else {}
+    if companion.get("ssh") and ros.get("containerized") and ros.get("container_name"):
+        return CompanionContainerProbeExecutor(companion, runner=runner)
+    return fallback_executor
 
 
 def _candidate_topics(role_settings, key):
@@ -466,6 +556,9 @@ def _topic_details(executor, topic_name, progress=None, topic_key=None):
             "Topic {}: sample complete".format(label),
             timeout_budget=TOPIC_SAMPLE_TIMEOUT_SECONDS,
         )
+    sample_text = sample.stdout
+    if topic_key in ("camera_compressed", "vendor_camera_jpg"):
+        sample_text = _trim_large_sample(sample_text)
     return {
         "name": topic_name,
         "available": info.ok and bool(topic_info.get("type")),
@@ -473,7 +566,7 @@ def _topic_details(executor, topic_name, progress=None, topic_key=None):
         "publishers": topic_info.get("publishers", []),
         "subscribers": topic_info.get("subscribers", []),
         "hz": _parse_rate(rate.stdout),
-        "sample": sample.stdout,
+        "sample": sample_text,
     }
 
 
@@ -507,25 +600,22 @@ def _tf_topic_details(executor, topic_name, progress=None, label=None):
                 TF_SAMPLE_TIMEOUT_SECONDS,
             )
         )
-    sample = executor.run(
-        "timeout {}s rostopic echo {}".format(
-            TF_SAMPLE_TIMEOUT_SECONDS,
-            shlex.quote(topic_name),
-        ),
-        check=False,
-    )
+    sample = executor.run(_tf_collection_command(topic_name, TF_SAMPLE_TIMEOUT_SECONDS), check=False)
     if progress:
         progress.finish(
             "TF {}: sample complete".format(topic_label),
             timeout_budget=TF_SAMPLE_TIMEOUT_SECONDS,
         )
+    collection = _parse_tf_collection_output(sample.stdout)
+    edges = collection.get("edges", []) if collection else _parse_tf_edges(sample.stdout)
     return {
         "name": topic_name,
         "available": info.ok and topic_info.get("type") == "tf2_msgs/TFMessage",
         "type": topic_info.get("type"),
         "publishers": topic_info.get("publishers", []),
         "subscribers": topic_info.get("subscribers", []),
-        "edges": _parse_tf_edges(sample.stdout),
+        "edges": edges,
+        "message_count": collection.get("count") if collection else None,
         "sample": sample.stdout,
     }
 
@@ -706,7 +796,7 @@ def _compare_site_config(site_config, observed, inferred_capabilities):
             }
         )
 
-    for topic_key in ["odom", "vendor_cmd_vel", "lidar_scan", "camera_compressed"] + SENSOR_TOPIC_KEYS:
+    for topic_key in ["odom", "vendor_cmd_vel", "lidar_scan", "camera_compressed", "vendor_camera_jpg"] + SENSOR_TOPIC_KEYS:
         observed_topic = observed.get("topics", {}).get(topic_key, {})
         suggested = observed_topic.get("selected")
         current = role_topic(scout, topic_key)
@@ -784,7 +874,9 @@ def probe_scout_capabilities(
 ):
     """Probe the live Scout ROS surface and infer capabilities."""
     scout = role_config(site_config, "scout")
-    executor = ProbeExecutor(scout, runner=runner or CommandRunner(artifact_run=artifact_run), force_remote=force_remote)
+    command_runner = runner or CommandRunner(artifact_run=artifact_run)
+    executor = ProbeExecutor(scout, runner=command_runner, force_remote=force_remote)
+    tf_executor = _tf_probe_executor(site_config, executor, runner=command_runner)
     progress_tracker = ProbeProgress(progress)
     payload = {
         "ok": False,
@@ -951,7 +1043,7 @@ def probe_scout_capabilities(
             topic_key=topic_key,
         )
 
-    payload["observed"]["tf"] = _tf_details(executor, topic_names, progress=progress_tracker)
+    payload["observed"]["tf"] = _tf_details(tf_executor, topic_names, progress=progress_tracker)
 
     for service_key in SERVICE_CANDIDATES:
         selected_service = selected_services[service_key]
@@ -997,6 +1089,7 @@ def probe_scout_capabilities(
     progress_tracker.begin("Inferring capabilities and site-inventory suggestions")
     lidar_details = payload["observed"]["topics"]["lidar_scan"].get("details") or {}
     camera_details = payload["observed"]["topics"]["camera_compressed"].get("details") or {}
+    vendor_camera_jpg_details = payload["observed"]["topics"]["vendor_camera_jpg"].get("details") or {}
     scout_tof_details = payload["observed"]["topics"]["scout_tof"].get("details") or {}
     tof_range_details = payload["observed"]["topics"]["tof_range"].get("details") or {}
     scout_imu_details = payload["observed"]["topics"]["scout_imu"].get("details") or {}
@@ -1005,7 +1098,15 @@ def probe_scout_capabilities(
         selected_topics.get("lidar_scan") and lidar_details.get("type") == TOPIC_TYPES["lidar_scan"]
     )
     payload["inferred_capabilities"]["camera"] = bool(
-        selected_topics.get("camera_compressed") or payload["observed"]["devices"]["camera"].get("exists")
+        (
+            selected_topics.get("camera_compressed")
+            and camera_details.get("type") == TOPIC_TYPES["camera_compressed"]
+        )
+        or (
+            selected_topics.get("vendor_camera_jpg")
+            and vendor_camera_jpg_details.get("type") == TOPIC_TYPES["vendor_camera_jpg"]
+        )
+        or payload["observed"]["devices"]["camera"].get("exists")
     )
     payload["inferred_capabilities"]["tof"] = bool(
         (

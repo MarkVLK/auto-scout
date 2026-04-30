@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from scout_navigation_controller import BATTERY_TOO_LOW_REASON
+from scout_navigation_controller import CAMERA_FRAME_UNAVAILABLE_REASON
 from scout_navigation_controller import CompanionMissionController
 from scout_navigation_controller import NAVIGATION_TF_UNAVAILABLE_REASON
 from scout_navigation_controller import REQUIRED_NAVIGATION_TF_EDGES
@@ -124,6 +125,8 @@ class MissionStartRefusalTest(unittest.TestCase):
         controller.scan_seen = False
         controller.tf_edges = set()
         controller.TFMessage = object
+        controller.camera_topic = "/camera/image_raw/compressed"
+        controller.latest_image = None
         return controller
 
     def test_refusal_writes_status_and_posts_notification(self):
@@ -209,6 +212,65 @@ class MissionStartRefusalTest(unittest.TestCase):
             controller.tf_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
             controller.mission = {
                 "name": "smoke_loop",
+                "route": {"loop_waypoints": ["one"]},
+            }
+            controller.wait_for_pose = lambda: None
+            controller.wait_for_move_base = lambda: None
+            controller.navigate_to_waypoint = navigated.append
+            controller.request_return = lambda: {"mode": "vendor_dock_requested"}
+            controller.capture_photo = lambda: "/tmp/photo.jpg"
+            controller.send_notification = lambda photo, return_result: {"sent": False, "reason": "disabled"}
+            controller.latest_pose = {"source": "odom"}
+
+            result = controller.run_smoke_loop()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(navigated, ["one"])
+
+    def test_still_photo_mission_refuses_before_navigation_when_no_camera_frame(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.site_config["roles"]["companion"]["notifications"]["webhook_url"] = ""
+            controller.wait_for_battery_guard_state = lambda: {
+                "mode": "charging",
+                "charging": True,
+                "battery_percent": 100.0,
+            }
+            controller.mission_start_min_battery_level = lambda: 50.0
+            controller.scan_seen = True
+            controller.tf_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
+            controller.mission = {
+                "name": "smoke_loop",
+                "capture": {"action": "still_photo"},
+                "route": {"loop_waypoints": ["one"]},
+            }
+            controller.evaluate_camera_preflight = lambda: controller.camera_input_state()
+            controller.wait_for_pose = lambda: self.fail("wait_for_pose should not run after camera preflight refusal")
+            controller.wait_for_move_base = lambda: self.fail("wait_for_move_base should not run after camera preflight refusal")
+
+            result = controller.run_smoke_loop()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["phase"], "preflight")
+        self.assertEqual(result["reason"], CAMERA_FRAME_UNAVAILABLE_REASON)
+        self.assertEqual(result["camera_topic"], "/camera/image_raw/compressed")
+
+    def test_still_photo_mission_proceeds_when_camera_frame_is_available(self):
+        navigated = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self.make_controller(temp_dir)
+            controller.wait_for_battery_guard_state = lambda: {
+                "mode": "charging",
+                "charging": True,
+                "battery_percent": 100.0,
+            }
+            controller.mission_start_min_battery_level = lambda: 50.0
+            controller.scan_seen = True
+            controller.tf_edges = set(REQUIRED_NAVIGATION_TF_EDGES)
+            controller.latest_image = object()
+            controller.mission = {
+                "name": "smoke_loop",
+                "capture": {"action": "still_photo"},
                 "route": {"loop_waypoints": ["one"]},
             }
             controller.wait_for_pose = lambda: None

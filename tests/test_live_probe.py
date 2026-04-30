@@ -36,6 +36,7 @@ class FakeRunner:
                 stdout=(
                     "/scan\n"
                     "/camera/image_raw/compressed\n"
+                    "/CoreNode/jpg\n"
                     "/SensorNode/tof\n"
                     "/scout/tof\n"
                     "/SensorNode/imu\n"
@@ -64,6 +65,9 @@ class FakeRunner:
             "rostopic info /camera/image_raw/compressed": FakeCommandResult(stdout="Type: sensor_msgs/CompressedImage\nPublishers:\n * /camera\nSubscribers:\n"),
             "rostopic hz -w 5 /camera/image_raw/compressed": FakeCommandResult(ok=False, stdout="average rate: 5.0\n"),
             "rostopic echo -n 1 /camera/image_raw/compressed": FakeCommandResult(stdout="header:\n"),
+            "rostopic info /CoreNode/jpg": FakeCommandResult(stdout="Type: roller_eye/frame\nPublishers:\n * /CoreNode\nSubscribers:\n"),
+            "rostopic hz -w 5 /CoreNode/jpg": FakeCommandResult(ok=False, stdout="average rate: 8.5\n"),
+            "rostopic echo -n 1 /CoreNode/jpg": FakeCommandResult(stdout="type: 1\ndata: [255, 216, 255]\n"),
             "rostopic info /SensorNode/tof": FakeCommandResult(stdout="Type: sensor_msgs/Range\nPublishers:\n * /SensorNode\nSubscribers:\n"),
             "rostopic hz -w 5 /SensorNode/tof": FakeCommandResult(ok=False, stdout="average rate: 10.0\n"),
             "rostopic echo -n 1 /SensorNode/tof": FakeCommandResult(stdout="range: 0.5\n"),
@@ -99,13 +103,7 @@ class FakeRunner:
             "rostopic hz -w 5 /scout/safety_state": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
             "rostopic echo -n 1 /scout/safety_state": FakeCommandResult(stdout='data: "{\\"state\\": \\"clear\\"}"\n'),
             "rostopic info /tf_static": FakeCommandResult(stdout="Type: tf2_msgs/TFMessage\nPublishers:\n * /robot_state_publisher\nSubscribers:\n"),
-            "rostopic echo /tf_static": FakeCommandResult(
-                stdout='transforms:\n  -\n    header:\n      frame_id: "base_link"\n    child_frame_id: "base_laser"\n',
-            ),
             "rostopic info /tf": FakeCommandResult(stdout="Type: tf2_msgs/TFMessage\nPublishers:\n * /scout_odom_bridge\nSubscribers:\n"),
-            "rostopic echo /tf": FakeCommandResult(
-                stdout='transforms:\n  -\n    header:\n      frame_id: "odom"\n    child_frame_id: "base_link"\n',
-            ),
             "rostopic info /SensorNode/simple_battery_status": FakeCommandResult(stdout="Type: roller_eye/status\nPublishers:\n * /SensorNode\nSubscribers:\n * /scout_battery_dock_guard\n"),
             "rostopic hz -w 5 /SensorNode/simple_battery_status": FakeCommandResult(ok=False, stdout="average rate: 1.0\n"),
             "rostopic echo -n 1 /SensorNode/simple_battery_status": FakeCommandResult(stdout="status: [0, 82, 0]\n"),
@@ -128,6 +126,15 @@ class FakeRunner:
     def run(self, command, cwd=None, check=True):
         command_text = command if isinstance(command, str) else " ".join(command)
         self.commands.append(command_text)
+        if "auto_scout_tf_probe" in command_text:
+            if "/tf_static" in command_text:
+                return FakeCommandResult(
+                    stdout='{"count": 1, "edges": [{"parent": "base_link", "child": "base_laser"}], "sample_edges": [{"parent": "base_link", "child": "base_laser"}]}\n',
+                )
+            if "/tf" in command_text:
+                return FakeCommandResult(
+                    stdout='{"count": 2, "edges": [{"parent": "map", "child": "odom"}, {"parent": "odom", "child": "base_link"}], "sample_edges": [{"parent": "map", "child": "odom"}, {"parent": "odom", "child": "base_link"}]}\n',
+                )
         for needle, result in self.lookup.items():
             if needle in command_text:
                 return result
@@ -173,6 +180,7 @@ class LiveProbeTest(unittest.TestCase):
         self.assertTrue(any("timeout 8s rostopic list" in command for command in runner.commands))
         self.assertTrue(any("timeout 8s rosnode list" in command for command in runner.commands))
         self.assertTrue(any("timeout 5s rostopic info /scan" in command for command in runner.commands))
+        self.assertTrue(any("docker exec auto-scout-melodic" in command and "auto_scout_tf_probe" in command and "/tf" in command for command in runner.commands))
 
     def test_probe_suggests_ttys4_and_vio_odom_when_defaults_are_wrong(self):
         site_config = default_site_config()
@@ -226,6 +234,38 @@ class LiveProbeTest(unittest.TestCase):
                 {"parent": "base_link", "child": "base_laser"},
                 {"parent": "odom", "child": "base_link"},
             ],
+        )
+
+    def test_probe_infers_camera_from_vendor_jpg_topic(self):
+        site_config = default_site_config()
+        runner = FakeRunner(
+            overrides={
+                "rostopic list": FakeCommandResult(
+                    stdout="/scan\n/CoreNode/jpg\n/MotorNode/baselink_odom_relative\n/cmd_vel_force\n",
+                ),
+                "test -e /dev/video0": FakeCommandResult(stdout="missing\n"),
+                "rostopic echo -n 1 /CoreNode/jpg": FakeCommandResult(stdout="type: 1\n" + ("x" * 5000)),
+            }
+        )
+
+        result = probe_scout_capabilities(
+            site_config,
+            observe_motion_seconds=0,
+            exercise_cmd_vel=False,
+            runner=runner,
+            force_remote=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["inferred_capabilities"]["camera"])
+        self.assertEqual(result["observed"]["topics"]["vendor_camera_jpg"]["selected"], "/CoreNode/jpg")
+        self.assertEqual(
+            result["observed"]["topics"]["vendor_camera_jpg"]["details"]["type"],
+            "roller_eye/frame",
+        )
+        self.assertIn(
+            "[truncated",
+            result["observed"]["topics"]["vendor_camera_jpg"]["details"]["sample"],
         )
 
     def test_probe_progress_reports_ordered_work_and_skipped_motion_observation(self):

@@ -28,6 +28,7 @@ from config_utils import load_scout_config
 
 DEFAULT_MISSION_START_MIN_BATTERY_LEVEL = 50.0
 BATTERY_TOO_LOW_REASON = "battery_too_low_to_leave_dock"
+CAMERA_FRAME_UNAVAILABLE_REASON = "camera_frame_unavailable"
 NAVIGATION_SCAN_UNAVAILABLE_REASON = "navigation_scan_unavailable"
 NAVIGATION_TF_UNAVAILABLE_REASON = "navigation_tf_unavailable"
 REQUIRED_NAVIGATION_TF_EDGES = [
@@ -140,8 +141,14 @@ class CompanionMissionController:
         rospy.init_node("scout_navigation_controller", anonymous=False)
         self.status_pub = rospy.Publisher("/scout/mission_status", String, queue_size=1)
         self.dock_pub = rospy.Publisher("/scout/runtime/request", String, queue_size=1)
+        self.camera_topic = scout_runtime_topic(
+            self.site_config,
+            self.config,
+            "camera_compressed",
+            "/camera/image_raw/compressed",
+        )
         rospy.Subscriber(
-            scout_runtime_topic(self.site_config, self.config, "camera_compressed", "/camera/image_raw/compressed"),
+            self.camera_topic,
             CompressedImage,
             self.camera_callback,
             queue_size=1,
@@ -256,8 +263,40 @@ class CompanionMissionController:
         navigation_gate = self.evaluate_navigation_preflight()
         if not navigation_gate["ok"]:
             return navigation_gate
+        camera_gate = self.evaluate_camera_preflight()
+        if not camera_gate["ok"]:
+            return camera_gate
         battery_gate["navigation"] = navigation_gate
+        battery_gate["camera"] = camera_gate
         return battery_gate
+
+    def mission_requires_still_photo(self):
+        capture = self.mission.get("capture", {})
+        return capture.get("action") == "still_photo"
+
+    def camera_input_state(self):
+        result = {
+            "ok": True,
+            "reason": "camera_frame_available",
+            "camera_topic": getattr(self, "camera_topic", "/camera/image_raw/compressed"),
+            "requires_still_photo": self.mission_requires_still_photo(),
+        }
+        if self.mission_requires_still_photo() and self.latest_image is None:
+            result["ok"] = False
+            result["reason"] = CAMERA_FRAME_UNAVAILABLE_REASON
+        return result
+
+    def evaluate_camera_preflight(self, timeout_seconds=5.0):
+        if not self.mission_requires_still_photo():
+            return self.camera_input_state()
+        start = self.rospy.Time.now()
+        while not self.rospy.is_shutdown():
+            state = self.camera_input_state()
+            if state["ok"]:
+                return state
+            if (self.rospy.Time.now() - start).to_sec() >= timeout_seconds:
+                return state
+            self.rospy.sleep(0.25)
 
     def navigation_input_state(self):
         required_edges = set(REQUIRED_NAVIGATION_TF_EDGES)

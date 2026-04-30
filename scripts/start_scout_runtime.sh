@@ -9,6 +9,7 @@ if [ ! -f "${DEFAULT_SITE_FILE}" ]; then
   DEFAULT_SITE_FILE="${REPO_ROOT}/config/site.yaml"
 fi
 SITE_FILE="${AUTO_SCOUT_SITE_CONFIG:-${DEFAULT_SITE_FILE}}"
+CAMERA_ENABLED="${AUTO_SCOUT_ENABLE_CAMERA:-false}"
 CATKIN_SETUP_DEFAULT="$(cd "${REPO_ROOT}/../.." && pwd)/devel/setup.bash"
 CATKIN_SETUP="${AUTO_SCOUT_CATKIN_SETUP:-${CATKIN_SETUP_DEFAULT}}"
 WORKSPACE_SRC="$(cd "${REPO_ROOT}/.." && pwd)"
@@ -32,4 +33,5 @@ fi
 cd "${REPO_ROOT}"
 exec roslaunch auto-scout scout_runtime.launch \
   config_file:="${CONFIG_FILE}" \
-  site_file:="${SITE_FILE}"
+  site_file:="${SITE_FILE}" \
+  enable_camera:="${CAMERA_ENABLED}"

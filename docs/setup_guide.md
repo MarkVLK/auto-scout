@@ -301,9 +301,11 @@ For patrol missions:
 - localize with `amcl`
 - define one or more room goals
 - replace the default dock approach placeholder with a real mapped pre-dock waypoint
-- capture stills or short clips at each goal
+- capture stills at each goal from vendor `/CoreNode/jpg` through the companion `/camera/image_raw/compressed` bridge
 - store media on the companion
 - optionally send a webhook or messaging notification after the route completes
+
+The normal proof-photo path is companion-side normalization of vendor `/CoreNode/jpg`; this avoids running OpenCV or direct `/dev/video0` capture on the Scout during normal missions. `scout_camera_driver.py` is retained as an opt-in fallback if the vendor JPG stream is unavailable. Vendor `/CoreNode/h264` is documented as a future video source, but H.264 recording is not part of the first still-photo implementation.
 
 ## 12. Dog Search Workflow
 

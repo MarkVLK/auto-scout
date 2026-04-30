@@ -15,6 +15,9 @@
     <param name="localization_mode" value="$(arg localization_mode)" />
   </node>
 
+  <node name="vendor_jpg_bridge" pkg="auto-scout" type="vendor_jpg_bridge.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
   <group if="$(arg localization_mode)">
     <include file="$(find auto-scout)/launch/navigation.launch">
       <arg name="map_file" value="$(arg map_file)" />

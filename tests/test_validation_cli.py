@@ -488,6 +488,8 @@ class ValidationCliTest(unittest.TestCase):
         scout = site_config["roles"]["scout"]
 
         self.assertEqual(scout["motion"]["drive_model"], "diff")
+        self.assertEqual(scout["topics"]["camera_compressed"], "/camera/image_raw/compressed")
+        self.assertEqual(scout["topics"]["vendor_camera_jpg"], "/CoreNode/jpg")
         self.assertEqual(scout["topics"]["scout_tof"], "/SensorNode/tof")
         self.assertEqual(scout["topics"]["tof_range"], "/scout/tof")
         self.assertEqual(scout["topics"]["scout_imu"], "/SensorNode/imu")
@@ -498,6 +500,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(scout["topics"]["battery_guard_state"], "/scout/battery_guard_state")
         self.assertEqual(scout["topics"]["battery_guard_control"], "/scout/battery_guard_control")
         self.assertEqual(scout["topics"]["vendor_dock_status"], "/CoreNode/going_home_status")
+        self.assertEqual(scout["adapters"]["camera"], "vendor_jpg_bridge")
         self.assertTrue(scout["capabilities"]["tof"])
         self.assertTrue(scout["capabilities"]["imu"])
         self.assertTrue(site_config["roles"]["scout"]["ssh"]["host"].endswith(".invalid"))
@@ -692,6 +695,7 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("Environment=ROS_HOSTNAME=moorebot-scout.local", scout_service)
         self.assertIn("Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs", scout_service)
         self.assertIn("Environment=ROS_OS_OVERRIDE=debian:stretch", scout_service)
+        self.assertIn("Environment=AUTO_SCOUT_ENABLE_CAMERA=false", scout_service)
         self.assertIn(
             "Environment=AUTO_SCOUT_SITE_CONFIG={}/config/site_local.yaml".format(
                 site_config["roles"]["scout"]["workspace_dir"]
@@ -776,12 +780,15 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn('AUTO_SCOUT_ROS_LOG_DIR="${AUTO_SCOUT_ROS_LOG_DIR:-${AUTO_SCOUT_STORAGE_ROOT}/ros-logs}"', start_script)
         self.assertIn("export AUTO_SCOUT_ROS_LOG_DIR", start_script)
         self.assertIn('export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"', scout_start_script)
+        self.assertIn('CAMERA_ENABLED="${AUTO_SCOUT_ENABLE_CAMERA:-false}"', scout_start_script)
+        self.assertIn('enable_camera:="${CAMERA_ENABLED}"', scout_start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_HOSTNAME", start_script)
         self.assertNotIn("moorebot-scout.local", start_script)
         self.assertIn('<arg name="site_file" default="$(find auto-scout)/config/site.yaml" />', companion_launch)
         self.assertIn('<arg name="localization_mode" default="false" />', companion_launch)
         self.assertIn('name="battery_map_return_controller"', companion_launch)
+        self.assertIn('name="vendor_jpg_bridge"', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)
         self.assertIn('<arg name="planner_cmd_vel" default="/scout/cmd_vel_planner"/>', navigation_launch)
         self.assertIn('name="robot_state_publisher"', navigation_launch)

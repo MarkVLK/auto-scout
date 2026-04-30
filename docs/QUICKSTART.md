@@ -82,7 +82,7 @@ python3 check_scout_compatibility.py --mode repo
 Before touching autonomy:
 
 - confirm what the Scout really exposes: vendor APIs, a remotely reachable ROS graph, or a mix
-- confirm the camera or video bridge works
+- confirm vendor `/CoreNode/jpg` is visible and that the companion `vendor_jpg_bridge.py` republishes frames on `/camera/image_raw/compressed`
 - confirm the LD19 publishes `/scan`
 - confirm vendor ToF and IMU are normalized to `/scout/tof` and `/scout/imu/data`
 - confirm `/scout/safety_state` is being published by `scout_safety_filter.py`
@@ -101,6 +101,7 @@ Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is
 Do not treat camera, ToF, or IMU as a LiDAR fallback for normal autonomy; the current safety filter stops or slows fresh planner commands when ToF is close and stops planner command flow when `/scan` is stale. With no active planner command, `/scout/safety_state` may report a blocked state, but `/scout/cmd_vel_companion` should stay quiet so manual app driving and vendor docking can own the robot.
 Charging on the dock is an allowed mission-start state once battery is at or above `safety.mission_start_min_battery_level`; below that, the companion refuses the mission and reports the current battery percentage.
 Do not call `/nav_low_bat` during bring-up unless the robot is near the dock and an operator has explicitly confirmed a live docking test.
+For proof photos, use vendor `/CoreNode/jpg` through the companion bridge as the normal path. `scout_camera_driver.py` stays disabled by default and is only an opt-in direct `/dev/video0` fallback. Vendor `/CoreNode/h264` remains available for future video work, but smoke-loop still-photo capture does not use it yet.
 
 ## 3. Start Mapping On The Companion
 

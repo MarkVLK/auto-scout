@@ -148,7 +148,11 @@ Reference this when resuming work. Items are ordered by dependency.
 These review items are complete in the current repo. Keep this section as a reference so another LLM does not re-open stale tasks.
 
 - [x] `CMakeLists.txt`: unused native OpenCV dependency removed
-- [x] `container/Dockerfile`: `python-opencv` is installed for `scout_camera_driver.py`
+- [x] `src/vendor_jpg_bridge.py`: companion-side adapter uses vendor `/CoreNode/jpg` as the normal proof-photo source and republishes it as `/camera/image_raw/compressed`
+- [x] `src/scout_camera_driver.py`: direct `/dev/video0` capture remains available as an opt-in Scout fallback, but it is disabled by default for normal missions
+- [x] `launch/companion_runtime.launch`: companion runtime starts `vendor_jpg_bridge.py` so proof photos use the vendor JPG stream without running OpenCV on the Scout
+- [x] Mission preflight: still-photo missions refuse before motion with `camera_frame_unavailable` if `/camera/image_raw/compressed` has not produced a frame
+- [x] Live probe: camera capability can be satisfied by either `/camera/image_raw/compressed` or vendor `/CoreNode/jpg`, and large camera samples are truncated in probe output
 - [x] `config/site.yaml`: `roles.scout.motion.drive_model: diff` is present
 - [x] `launch/navigation.launch`: `odom_model_type` is driven by `AUTO_SCOUT_ODOM_MODEL_TYPE`, defaulting to `diff`
 - [x] `launch/navigation.launch`: `move_base` output is routed to `/scout/cmd_vel_planner` so Scout-side safety filtering owns the final command gate
@@ -438,7 +442,10 @@ These review items are complete in the current repo. Keep this section as a refe
   ```bash
   ./auto-scout run smoke-loop
   ```
-- [ ] Verify photo capture works at each waypoint
+- [ ] Verify full mission photo artifact capture at each waypoint after LiDAR is reattached and `/scan` is publishing
+  - 2026-04-29 passive validation: companion `vendor_jpg_bridge.py` was running and `/camera/image_raw/compressed` published vendor JPG frames from `/CoreNode/jpg` at about 5-7 Hz
+  - Mission still-photo preflight now blocks before movement with `camera_frame_unavailable` when no compressed frame is available
+  - H.264 recording from `/CoreNode/h264` remains future work; current mission capture is still-photo proof capture only
 - [ ] Store live notification settings in `config/site_local.yaml`, not tracked `config/site.yaml`
 
 ### Low-Battery Docking Staging
@@ -494,8 +501,8 @@ These review items are complete in the current repo. Keep this section as a refe
 | IMU normalized | `/scout/imu/data` | Published by `scout_imu_bridge.py`; verify after redeploy |
 | ToF source | `/SensorNode/tof` | Available per prior topic inventory; reconfirm during full validation if needed |
 | ToF normalized | `/scout/tof` | Published by `scout_tof_bridge.py`; used by safety filter |
-| Camera h264 | `/CoreNode/h264` | Available per prior topic inventory |
-| Camera jpg | `/CoreNode/jpg` | Available per prior topic inventory |
+| Camera h264 | `/CoreNode/h264` | Available per prior topic inventory; future video source, out of scope for current still-photo proof capture |
+| Camera jpg | `/CoreNode/jpg` | Normal mission proof-photo source; companion bridge republishes accepted JPG frames to `/camera/image_raw/compressed` |
 | Dog detection | `/scout/dog_detection_external` | Repo bridge topic; confirm any built-in Scout source topic before wiring |
 
 ## Key Reference: Network and Access

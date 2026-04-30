@@ -2,6 +2,7 @@
 <launch>
   <arg name="config_file" default="$(find auto-scout)/config/scout_config.yaml" />
   <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
+  <arg name="enable_camera" default="false" />
 
   <rosparam file="$(arg config_file)" command="load" />
 
@@ -14,7 +15,8 @@
   </node>
 
   <node name="scout_camera_driver" pkg="auto-scout" type="scout_camera_driver.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen"
+        if="$(arg enable_camera)" />
 
   <node name="scout_tof_bridge" pkg="auto-scout" type="scout_tof_bridge.py"
         args="--config $(arg config_file) --site $(arg site_file)" output="screen" />

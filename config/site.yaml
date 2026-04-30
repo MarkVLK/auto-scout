@@ -24,6 +24,7 @@ roles:
       lidar: "/dev/ttyS4"
     topics:
       camera_compressed: "/camera/image_raw/compressed"
+      vendor_camera_jpg: "/CoreNode/jpg"
       lidar_scan: "/scan"
       odom: "/MotorNode/baselink_odom_relative"
       vendor_cmd_vel: "/cmd_vel_force"
@@ -45,7 +46,7 @@ roles:
       drive_model: "diff"
     adapters:
       motion: "rollereye_or_vendor_bridge"
-      camera: "opencv_device"
+      camera: "vendor_jpg_bridge"
       lidar: "ld19_serial"
       dock: "vendor_dock"
       dog_detection: "external_event"

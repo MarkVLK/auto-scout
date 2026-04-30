@@ -65,6 +65,7 @@ Environment=ROS_MASTER_URI={ros_master_uri}
 Environment=ROS_HOSTNAME={advertise_host}
 Environment=ROS_LOG_DIR={ros_log_dir}
 Environment=ROS_OS_OVERRIDE=debian:stretch
+Environment=AUTO_SCOUT_ENABLE_CAMERA=false
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5

@@ -21,6 +21,7 @@ SUPPORTED_SSH_AUTH_MODES = ("agent", "key", "password")
 SCOUT_TOPIC_FALLBACKS = {
     "lidar_scan": "lidar_scan",
     "camera_compressed": "camera_compressed",
+    "vendor_camera_jpg": "vendor_camera_jpg",
     "scout_tof": "scout_tof",
     "tof_range": "tof_range",
     "scout_imu": "scout_imu",
@@ -158,6 +159,7 @@ def default_site_config():
                 },
                 "topics": {
                     "camera_compressed": "/camera/image_raw/compressed",
+                    "vendor_camera_jpg": "/CoreNode/jpg",
                     "lidar_scan": "/scan",
                     "odom": "/MotorNode/baselink_odom_relative",
                     "vendor_cmd_vel": "/cmd_vel_force",
@@ -181,7 +183,7 @@ def default_site_config():
                 },
                 "adapters": {
                     "motion": "rollereye_or_vendor_bridge",
-                    "camera": "opencv_device",
+                    "camera": "vendor_jpg_bridge",
                     "lidar": "ld19_serial",
                     "dock": "vendor_dock",
                     "dog_detection": "external_event",
