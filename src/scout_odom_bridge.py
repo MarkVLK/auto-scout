@@ -3,17 +3,25 @@
 
 import argparse
 
-from config_utils import load_scout_config
-from scout_runtime_config import load_site_config
 from scout_runtime_config import role_config
 from scout_runtime_config import role_motion_setting
 from scout_runtime_config import scout_runtime_topic
+from scout_node_utils import load_runtime_configs
+from scout_node_utils import private_param
 
 
 class ScoutOdomBridge:
     """Republish Scout vendor odometry on standard ROS interfaces."""
 
-    def __init__(self, config_path=None, site_path=None):
+    def __init__(
+        self,
+        config_path=None,
+        site_path=None,
+        config=None,
+        site_config=None,
+        init_node=True,
+        param_prefix=None,
+    ):
         try:
             import rospy
             from nav_msgs.msg import Odometry
@@ -25,19 +33,29 @@ class ScoutOdomBridge:
         self.TransformStamped = None
         self.TFMessage = None
         self.tf_publisher = None
-        rospy.init_node("scout_odom_bridge", anonymous=False)
-        self.config, self.config_path = load_scout_config(config_path)
-        self.site_config, self.site_path = load_site_config(site_path)
+        if init_node:
+            rospy.init_node("scout_odom_bridge", anonymous=False)
+        self.config, self.config_path, self.site_config, self.site_path = load_runtime_configs(
+            rospy,
+            config_path=config_path,
+            site_path=site_path,
+            config=config,
+            site_config=site_config,
+            param_prefix=param_prefix,
+        )
         scout = role_config(self.site_config, "scout")
 
         self.source_topic = rospy.get_param(
-            "~source_topic",
+            private_param(param_prefix, "source_topic"),
             scout_runtime_topic(self.site_config, self.config, "odom", "/MotorNode/baselink_odom_relative"),
         )
-        self.output_topic = rospy.get_param("~output_topic", "/odom")
-        self.forward_axis = rospy.get_param("~forward_axis", role_motion_setting(scout, "forward_axis", "y"))
-        self.output_frame = rospy.get_param("~frame_id", "odom")
-        self.output_child_frame = rospy.get_param("~child_frame_id", "base_link")
+        self.output_topic = rospy.get_param(private_param(param_prefix, "output_topic"), "/odom")
+        self.forward_axis = rospy.get_param(
+            private_param(param_prefix, "forward_axis"),
+            role_motion_setting(scout, "forward_axis", "y"),
+        )
+        self.output_frame = rospy.get_param(private_param(param_prefix, "frame_id"), "odom")
+        self.output_child_frame = rospy.get_param(private_param(param_prefix, "child_frame_id"), "base_link")
 
         self.publisher = rospy.Publisher(self.output_topic, Odometry, queue_size=10)
         self._setup_tf_publisher()
@@ -101,13 +119,16 @@ class ScoutOdomBridge:
         tf_message.transforms = [transform]
         self.tf_publisher.publish(tf_message)
 
-    def run(self):
+    def log_active(self):
         self.rospy.loginfo(
             "Scout odom bridge active: %s -> %s (tf=%s)",
             self.source_topic,
             self.output_topic,
             "enabled" if self.tf_available() else "degraded",
         )
+
+    def run(self):
+        self.log_active()
         self.rospy.spin()
 
 

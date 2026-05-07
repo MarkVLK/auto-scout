@@ -70,6 +70,10 @@ NATIVE_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp")
 PLACEHOLDER_MARKER = ".invalid"
 DEFAULT_ENABLE_LIDAR = False
 DEFAULT_ENABLE_NAV_STACK = False
+SCOUT_MIN_AVAILABLE_MEMORY_MIB = 150
+SCOUT_MIN_ROOT_FREE_MIB = 250
+SCOUT_AUTO_NODE_CPU_WARN_PERCENT = 60.0
+SCOUT_AUTO_NODE_RSS_WARN_MIB = 80
 
 
 def run_command(command):
@@ -558,6 +562,7 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
     launch_roots = {}
     expected_nodes = {
         "launch/scout_runtime.launch": [
+            "scout_core_runtime",
             "scout_runtime_agent",
             "ld19_lidar_driver",
             "scout_camera_driver",
@@ -677,6 +682,12 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         launch_issues.append("launch/scout_runtime.launch must default enable_lidar to false while the LD19 is detached")
     if 'if="$(arg enable_lidar)"' not in scout_runtime_text:
         launch_issues.append("launch/scout_runtime.launch must gate ld19_lidar_driver behind enable_lidar")
+    if 'name="use_core_runtime" default="true"' not in scout_runtime_text:
+        launch_issues.append("launch/scout_runtime.launch must default to the consolidated Scout core runtime")
+    if 'name="scout_core_runtime"' not in scout_runtime_text or 'if="$(arg use_core_runtime)"' not in scout_runtime_text:
+        launch_issues.append("launch/scout_runtime.launch must gate scout_core_runtime behind use_core_runtime")
+    if 'unless="$(arg use_core_runtime)"' not in scout_runtime_text:
+        launch_issues.append("launch/scout_runtime.launch must keep the legacy per-node Scout launch path as rollback")
     if 'name="enable_nav_stack" default="false"' not in companion_runtime_text:
         launch_issues.append("launch/companion_runtime.launch must default enable_nav_stack to false while the LD19 is detached")
     if 'if="$(arg enable_nav_stack)"' not in companion_runtime_text:
@@ -710,6 +721,10 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
         "systemd/auto-scout-ros-log-cleanup.service",
         "systemd/auto-scout-ros-log-cleanup.timer",
         "systemd/auto-scout-scout-swap-setup.service",
+        "systemd/auto-scout-scout-resource-metrics.service",
+        "systemd/auto-scout-scout-resource-metrics.timer",
+        "systemd/auto-scout-companion-resource-alert.service",
+        "systemd/auto-scout-companion-resource-alert.timer",
         "systemd/userdata-auto\\x2dscout-auto\\x2dscout.swap.swap",
         "container/Dockerfile",
         "container/docker-compose.yml",
@@ -885,6 +900,12 @@ def add_repo_checks(report, site_config, site_path, project_config, config_path)
             deploy_issues.append("src/auto_scout/deploy.py must render companion site/config paths in the container namespace")
         if "SCOUT_SWAP_PATH" not in deploy_text or "SCOUT_SWAP_UNIT" not in deploy_text:
             deploy_issues.append("src/auto_scout/deploy.py must install the persistent Scout swap setup and swap units")
+        if "SCOUT_RESOURCE_METRICS_DIR" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must install the Scout resource metrics timer")
+        if "AUTO_SCOUT_USE_CORE_RUNTIME=true" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must enable the feature-gated Scout core runtime by default")
+        if "COMPANION_RESOURCE_ALERT_TIMER" not in deploy_text:
+            deploy_issues.append("src/auto_scout/deploy.py must install the companion resource alert timer when notify is enabled")
 
     if deploy_issues:
         report.add(
@@ -1834,6 +1855,97 @@ def _add_resource_check(report):
     )
 
 
+def _split_probe_sections(output):
+    sections = {}
+    current = None
+    lines = []
+    for line in (output or "").splitlines():
+        if line.startswith("__") and line.endswith("__"):
+            if current is not None:
+                sections[current] = "\n".join(lines).strip()
+            current = line.strip("_")
+            lines = []
+            continue
+        if current is not None:
+            lines.append(line)
+    if current is not None:
+        sections[current] = "\n".join(lines).strip()
+    return sections
+
+
+def _parse_free_available_mib(free_output):
+    for line in (free_output or "").splitlines():
+        parts = line.split()
+        if parts and parts[0].startswith("Mem:") and len(parts) >= 7:
+            try:
+                return int(parts[6])
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_vmstat_swap_io(vmstat_output):
+    max_si = 0
+    max_so = 0
+    for line in (vmstat_output or "").splitlines():
+        parts = line.split()
+        if len(parts) < 8 or not parts[0].lstrip("-").isdigit():
+            continue
+        try:
+            max_si = max(max_si, int(parts[6]))
+            max_so = max(max_so, int(parts[7]))
+        except ValueError:
+            continue
+    return max_si, max_so
+
+
+def _parse_root_free_mib(df_output):
+    for line in (df_output or "").splitlines():
+        parts = line.split()
+        if len(parts) < 6 or parts[-1] != "/":
+            continue
+        try:
+            return int(parts[3]) // 1024
+        except ValueError:
+            return None
+    return None
+
+
+def _auto_scout_process_warnings(ps_output):
+    warnings = []
+    for line in (ps_output or "").splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 5 or parts[0] == "PID":
+            continue
+        pid, command, cpu_text, rss_text, args = parts
+        if "/auto-scout/" not in args and "auto-scout" not in args:
+            continue
+        try:
+            cpu = float(cpu_text)
+            rss_mib = int(rss_text) / 1024.0
+        except ValueError:
+            continue
+        if cpu >= SCOUT_AUTO_NODE_CPU_WARN_PERCENT:
+            warnings.append(
+                "Auto-Scout process {} ({}) is using {:.1f}% CPU; threshold is {:.1f}%.".format(
+                    pid,
+                    command,
+                    cpu,
+                    SCOUT_AUTO_NODE_CPU_WARN_PERCENT,
+                )
+            )
+        if rss_mib >= SCOUT_AUTO_NODE_RSS_WARN_MIB:
+            warnings.append(
+                "Auto-Scout process {} ({}) is using {:.1f} MiB RSS; threshold is {} MiB.".format(
+                    pid,
+                    command,
+                    rss_mib,
+                    SCOUT_AUTO_NODE_RSS_WARN_MIB,
+                )
+            )
+    return warnings
+
+
 def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_probe_enabled):
     if not live_probe_enabled:
         report.add(
@@ -1848,6 +1960,9 @@ def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_
     command = (
         "echo __FREE__; free -m || true; "
         "echo __SWAPS__; cat /proc/swaps || true; "
+        "echo __VMSTAT__; vmstat 1 3 || true; "
+        "echo __DF__; df -Pk / /userdata /tmp 2>/dev/null || df -Pk || true; "
+        "echo __PS__; ps -eo pid,comm,%cpu,rss,args --sort=-%cpu | head -40 || true; "
         "echo __OOM__; "
         "{ sudo -n journalctl -k --since '24 hours ago' --no-pager 2>/dev/null "
         "|| journalctl -k --since '24 hours ago' --no-pager 2>/dev/null "
@@ -1872,21 +1987,48 @@ def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_
 
     output = result.stdout or ""
     swap_active = "/userdata/auto-scout/auto-scout.swap" in output
+    sections = _split_probe_sections(output)
+    oom_section = sections.get("OOM", "")
     oom_lines = [
         line.strip()
-        for line in output.splitlines()
+        for line in oom_section.splitlines()
         if any(
             marker in line
             for marker in ["Out of memory", "oom-killer", "Killed process", "exit code -9"]
         )
     ]
     details = []
-    sections = output.split("__OOM__", 1)
-    snapshot = sections[0].strip()
+    snapshot = output.split("__OOM__", 1)[0].strip()
     if snapshot:
         details.append(snapshot)
     if oom_lines:
         details.extend(oom_lines)
+    resource_warnings = []
+    available_mib = _parse_free_available_mib(sections.get("FREE", ""))
+    if available_mib is not None and available_mib < SCOUT_MIN_AVAILABLE_MEMORY_MIB:
+        resource_warnings.append(
+            "Scout available memory is {} MiB; threshold is {} MiB.".format(
+                available_mib,
+                SCOUT_MIN_AVAILABLE_MEMORY_MIB,
+            )
+        )
+    max_si, max_so = _parse_vmstat_swap_io(sections.get("VMSTAT", ""))
+    if max_si > 0 or max_so > 0:
+        resource_warnings.append(
+            "Scout swap I/O is active during vmstat sample: max si={} KiB/s, max so={} KiB/s.".format(
+                max_si,
+                max_so,
+            )
+        )
+    root_free_mib = _parse_root_free_mib(sections.get("DF", ""))
+    if root_free_mib is not None and root_free_mib < SCOUT_MIN_ROOT_FREE_MIB:
+        resource_warnings.append(
+            "Scout root filesystem free space is {} MiB; threshold is {} MiB.".format(
+                root_free_mib,
+                SCOUT_MIN_ROOT_FREE_MIB,
+            )
+        )
+    resource_warnings.extend(_auto_scout_process_warnings(sections.get("PS", "")))
 
     if oom_lines:
         report.add(
@@ -1908,12 +2050,34 @@ def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_
         )
         return
 
+    if resource_warnings:
+        report.add(
+            "runtime.scout_memory_pressure",
+            "warn",
+            "Scout swap is active and no recent OOM kills were found, but resource pressure thresholds were exceeded",
+            details=details + resource_warnings,
+            evidence={
+                "swap_active": swap_active,
+                "available_memory_mib": available_mib,
+                "max_swap_in_kib_per_second": max_si,
+                "max_swap_out_kib_per_second": max_so,
+                "root_free_mib": root_free_mib,
+            },
+        )
+        return
+
     report.add(
         "runtime.scout_memory_pressure",
         "pass",
         "Scout swap is active and no recent OOM kills were found",
         details=details,
-        evidence={"swap_active": swap_active},
+        evidence={
+            "swap_active": swap_active,
+            "available_memory_mib": available_mib,
+            "max_swap_in_kib_per_second": max_si,
+            "max_swap_out_kib_per_second": max_so,
+            "root_free_mib": root_free_mib,
+        },
     )
 
 

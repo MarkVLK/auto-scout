@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scout_odom_bridge
+import scout_node_utils
 
 
 class FakePublisher:
@@ -161,8 +162,8 @@ def make_bridge(include_tf=True):
     rospy, modules = fake_ros_modules(include_tf=include_tf)
     patches = [
         patch.dict(sys.modules, modules),
-        patch.object(scout_odom_bridge, "load_scout_config", return_value=({}, None)),
-        patch.object(scout_odom_bridge, "load_site_config", return_value=({}, None)),
+        patch.object(scout_node_utils, "load_scout_config", return_value=({}, None)),
+        patch.object(scout_node_utils, "load_site_config", return_value=({}, None)),
         patch.object(scout_odom_bridge, "role_config", return_value={}),
         patch.object(scout_odom_bridge, "role_motion_setting", return_value="y"),
         patch.object(

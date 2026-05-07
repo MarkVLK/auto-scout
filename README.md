@@ -88,8 +88,10 @@ For the rooted Scout unit validated in the LiDAR bring-up transcript, treat thes
 - Scout LiDAR bring-up path: the repo's built-in `src/ld19_lidar_driver.py`, launched through `scout_runtime.launch` only when `AUTO_SCOUT_ENABLE_LIDAR=true`
 - Current LD19-detached default: Scout deploy renders `AUTO_SCOUT_ENABLE_LIDAR=false`, companion deploy renders `AUTO_SCOUT_ENABLE_NAV_STACK=false`, and validation treats `/scan`, mapping, patrol, and smoke-loop autonomy as intentionally disabled
 - Current camera default: Scout direct OpenCV capture stays off with `AUTO_SCOUT_ENABLE_CAMERA=false`; proof photos use vendor `/CoreNode/jpg` through a lazy companion bridge that subscribes only while `/camera/image_raw/compressed` has consumers
-- Current memory default: Scout deploy installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap` and validation checks `/proc/swaps`, `free -m`, and recent OOM/SIGKILL logs during live Scout validation
-- Scout built-in sensor path: vendor ToF and IMU topics are normalized to `/scout/tof` and `/scout/imu/data`
+- Current memory default: Scout deploy installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap`, writes lightweight resource snapshots under `/userdata/auto-scout/resource-metrics`, and validation checks swap, memory, disk, process CPU/RSS, and recent OOM/SIGKILL logs
+- Current alert default: companion deploy installs a Pi-side resource alert timer when notify is enabled; it sends Slack only for critical Scout/Pi health issues through the configured companion webhook. When the Pi runs the check locally, it uses the Scout `ssh.host_key_alias` target so the Pi-local `~/.ssh/config` key selection is honored.
+- Scout built-in sensor path: vendor ToF and IMU topics are normalized to `/scout/tof` and `/scout/imu/data`; IMU output defaults to a 50 Hz cap to reduce Scout CPU load
+- Scout runtime default: `scout_core_runtime.py` consolidates heartbeat, ToF, IMU, odom/TF, battery guard, safety filter, and motion bridge into one process; `AUTO_SCOUT_USE_CORE_RUNTIME=false` restores the legacy per-node launch path
 - Scout low-battery path: `scout_battery_dock_guard.py` watches `/SensorNode/simple_battery_status`, publishes `/scout/battery_guard_state`, accepts `/scout/battery_guard_control`, monitors `/CoreNode/going_home_status`, and calls vendor `/nav_low_bat` only when a return-to-dock action is required
 - Scout command safety path: `move_base` publishes `/scout/cmd_vel_planner`, `scout_safety_filter.py` gates fresh planner commands only, and `scout_motion_bridge.py` sends only filtered `/scout/cmd_vel_companion` commands to `/cmd_vel_force`
 
@@ -302,7 +304,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- companion_runtime.launch        # Starts companion heartbeat and lazy vendor JPG camera bridge; gates nav/map-return behind enable_nav_stack.
 |   |-- navigation.launch               # Companion localization plus `move_base` stack for saved-map patrols.
 |   |-- scout_complete.launch           # Combined bring-up wrapper for optional local Scout bridge plus companion runtime.
-|   |-- scout_runtime.launch            # Scout-side bridge launch for heartbeat, optional lidar, optional direct camera, ToF, IMU, battery guard, safety, odom, and motion nodes.
+|   |-- scout_runtime.launch            # Scout-side runtime launch with optional isolated lidar/camera and feature-gated core process.
 |   `-- slam_mapping.launch             # Companion-side gmapping stack with robot model and transforms.
 |-- legacy/                             # Quarantined browser and voice surfaces that are no longer on the supported path.
 |   |-- README.md                       # Explains what was retired and where the supported interfaces now live.
@@ -314,6 +316,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   `-- scout_navigation.rviz           # RViz workspace for scan, map, robot model, and path visualization.
 |-- scripts/                            # Shell entrypoints used by rendered systemd services.
 |   |-- cleanup_ros_logs.py             # Bounds ROS log directories by age and total size.
+|   |-- collect_scout_resource_metrics.sh # Captures Scout load, memory, swap, disk, and process snapshots.
 |   |-- start_companion_stack.sh        # Starts or stops the companion Docker Compose stack.
 |   `-- start_scout_runtime.sh          # Sources ROS/catkin state and launches the Scout runtime.
 |-- src/                                # Python source tree for CLI, runtime nodes, and helpers.
@@ -328,12 +331,14 @@ This listing covers the maintained tracked project tree and also calls out the l
 |   |-- map_file_guard.py               # Fails localization launch early when the configured map file is missing.
 |   |-- scout_camera_driver.py          # Opt-in direct `/dev/video0` compressed-image camera fallback for the Scout runtime.
 |   |-- scout_battery_dock_guard.py     # Scout-local low-battery guard and vendor `/nav_low_bat` docking handoff.
+|   |-- scout_core_runtime.py           # Consolidated Scout-side heartbeat, bridge, guard, safety, odom, and motion runtime.
 |   |-- scout_imu_bridge.py             # Normalize the vendor IMU topic to `/scout/imu/data`.
 |   |-- scout_motion_bridge.py          # Republish standard autonomy `Twist` commands onto the vendor motion topic.
 |   |-- scout_navigation_controller.py  # Python 2 companion-side smoke-loop mission runner.
 |   |-- scout_odom_bridge.py            # Normalize vendor odometry into `/odom` plus TF.
 |   |-- scout_runtime_agent.py          # Python 2 Scout runtime heartbeat publisher.
 |   |-- scout_runtime_config.py         # Python 2-safe site/config loader for Scout-launched nodes.
+|   |-- scout_node_utils.py             # Shared helpers for standalone and consolidated Scout node setup.
 |   |-- vendor_jpg_bridge.py            # Companion adapter from vendor `/CoreNode/jpg` frames to standard compressed images.
 |   |-- scout_safety_filter.py          # Gate planner velocity commands using ToF, LiDAR heartbeat, and battery guard state.
 |   |-- scout_tof_bridge.py             # Normalize the vendor ToF range topic to `/scout/tof`.
@@ -344,6 +349,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |       |-- artifacts.py                # Helpers for writing timestamped artifact logs and JSON outputs.
 |       |-- cli.py                      # Argument parser and command dispatcher for configure, deploy, validate, probe, and run.
 |       |-- command_runner.py           # Local, SSH, rsync, and SCP command execution helpers with dry-run support.
+|       |-- resource_alerts.py          # Scout/Pi critical resource alert collection and cooldown logic.
 |       |-- deploy.py                   # Scout and companion deployment routines plus rendered systemd service templates.
 |       |-- install_config.py           # Interactive and flag-driven install/deploy configuration helpers.
 |       |-- live_probe.py               # Live Scout topic/device probing and site-inventory reconciliation logic.
@@ -387,7 +393,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 ### Phase 1
 
 - Verify root access and topic or API access on the Scout.
-- Bring up the camera bridge, ToF, IMU, low-battery dock guard, safety filter, Scout swap, and Scout-side odom/motion compatibility bridges while the LD19 is detached.
+- Bring up the lazy camera bridge, ToF, throttled IMU, low-battery dock guard, safety filter, Scout swap, resource snapshots, Slack resource alerts, and consolidated Scout core runtime while the LD19 is detached.
 - Re-enable the LD19 and companion nav stack only after the permanent mount/harness is installed and `/scan` is revalidated.
 - Confirm `./auto-scout probe scout --observe-motion 15` and `./auto-scout probe scout --exercise-cmd-vel` behave as expected.
 
@@ -402,7 +408,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 - Add named room goals and patrol sequences.
 - Replace `navigation.dock_approach_waypoint: "charging_station"` with a measured pre-dock waypoint after mapping.
 - Capture media per room and store it on the companion.
-- Add webhook delivery for notifications.
+- Keep webhook delivery active for mission notifications and critical resource alerts.
 
 ### Phase 4
 

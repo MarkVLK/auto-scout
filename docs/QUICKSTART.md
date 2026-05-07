@@ -53,6 +53,12 @@ Then send a one-off test message:
 ./auto-scout notify test
 ```
 
+The companion deploy also installs a resource-alert timer when notify is enabled. To test the same critical Scout/Pi alert path manually, run:
+
+```bash
+./auto-scout notify resource-check --force-alert
+```
+
 Slack webhook URLs are secrets, and Slack documents that leaked URLs may be revoked. Do not commit them, paste them into issues, or publish local artifacts that captured old webhook snapshots. `config/site_local.yaml`, `config/secrets.yaml`, and `artifacts/` are ignored by this repo for that reason.
 
 If you run full system validation from the Pi, provision SSH known hosts first:
@@ -70,7 +76,7 @@ Pay attention to:
 - whether the Scout probe found the expected vendor odometry and motion topics
 - whether the Scout probe can passively see the battery status topic, battery guard state topic, vendor dock status topic, and `/nav_low_bat` service type
 - while the LD19 is detached, whether LiDAR serial access, mapping, patrol, and smoke-loop autonomy are reported as intentional `SKIP` checks instead of launch failures
-- during live Scout validation, whether `/userdata/auto-scout/auto-scout.swap` appears in `/proc/swaps` and recent OOM/SIGKILL log checks are clean
+- during live Scout validation, whether `/userdata/auto-scout/auto-scout.swap` appears in `/proc/swaps`, `/userdata/auto-scout/resource-metrics` is receiving snapshots, interval swap I/O is below the alert threshold after boot settles, and recent OOM/SIGKILL log checks are clean
 
 If you only want to validate the repo wiring without probing the current machine, use:
 
@@ -86,6 +92,7 @@ Before touching autonomy:
 - confirm vendor `/CoreNode/jpg` is visible and that the companion `vendor_jpg_bridge.py` republishes frames on `/camera/image_raw/compressed`
 - while the LD19 is detached, keep `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false`; after the mount/harness is installed, re-enable them and confirm the LD19 publishes `/scan`
 - confirm vendor ToF and IMU are normalized to `/scout/tof` and `/scout/imu/data`
+- confirm `/scout/imu/data` is near the configured 50 Hz default cap, not the raw vendor IMU rate
 - confirm `/scout/safety_state` is being published by `scout_safety_filter.py`
 - confirm `/scout/battery_guard_state` is being published by `scout_battery_dock_guard.py`
 - confirm `/SensorNode/simple_battery_status`, `/CoreNode/going_home_status`, and `/nav_low_bat` are visible passively before any live docking test
@@ -96,6 +103,7 @@ Before touching autonomy:
 - if the Scout still has an older external `ldlidar.service`, stop and disable it before launching the repo-managed Scout runtime so two processes do not fight over `/dev/ttyS4`
 - confirm you have a usable pose or odometry source by running `./auto-scout probe scout --observe-motion 15`
 - confirm the Scout-side compatibility bridges expose standard `/odom`, `/scout/cmd_vel_planner`, `/scout/cmd_vel_companion`, and `/cmd_vel_force`
+- with the default deployment, confirm the Scout has one `scout_core_runtime.py` process plus optional isolated LD19/camera processes; set `AUTO_SCOUT_USE_CORE_RUNTIME=false` only for rollback
 
 If pose is missing, stop here. `slam_gmapping` and `move_base` will not behave well without it.
 Do not treat Nav2, SLAM Toolbox, or `ros1_bridge` as the next step while pose is still unproven.

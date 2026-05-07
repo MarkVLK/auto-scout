@@ -44,6 +44,13 @@ topics:
   vendor_dog_detection: "/scout/dog_detection_external"
   external_dog_detection: "/scout/dog_detection_external"
 
+imu:
+  frame_id: "imu_link"
+  output_hz: 50.0
+
+tof:
+  frame_id: "tof_link"
+
 waypoints:
   home:
     x: 0.0

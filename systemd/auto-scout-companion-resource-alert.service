@@ -1,0 +1,15 @@
+# Example unit only. `./auto-scout deploy companion` renders a role-specific
+# service with the configured username, workspace path, and storage root.
+[Unit]
+Description=Send Auto-Scout critical resource alerts
+
+[Service]
+Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+User=automark
+Group=automark
+WorkingDirectory=/home/automark/auto-scout
+Environment=AUTO_SCOUT_SITE_CONFIG=/home/automark/auto-scout/config/site_local.yaml
+ExecStart=/bin/bash -lc '/home/automark/auto-scout/auto-scout --site /home/automark/auto-scout/config/site_local.yaml notify resource-check --local-companion --quiet --state-dir /srv/auto-scout/alert-state'

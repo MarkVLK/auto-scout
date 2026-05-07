@@ -4,11 +4,13 @@
   <arg name="site_file" default="$(find auto-scout)/config/site.yaml" />
   <arg name="enable_camera" default="false" />
   <arg name="enable_lidar" default="false" />
+  <arg name="use_core_runtime" default="true" />
 
   <rosparam file="$(arg config_file)" command="load" />
 
-  <node name="scout_runtime_agent" pkg="auto-scout" type="scout_runtime_agent.py"
-        args="--site $(arg site_file)" output="screen" />
+  <node name="scout_core_runtime" pkg="auto-scout" type="scout_core_runtime.py"
+        args="--config $(arg config_file) --site $(arg site_file)" output="screen"
+        if="$(arg use_core_runtime)" />
 
   <node name="ld19_lidar_driver" pkg="auto-scout" type="ld19_lidar_driver.py" output="screen"
         if="$(arg enable_lidar)">
@@ -20,21 +22,26 @@
         args="--config $(arg config_file) --site $(arg site_file)" output="screen"
         if="$(arg enable_camera)" />
 
-  <node name="scout_tof_bridge" pkg="auto-scout" type="scout_tof_bridge.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+  <group unless="$(arg use_core_runtime)">
+    <node name="scout_runtime_agent" pkg="auto-scout" type="scout_runtime_agent.py"
+          args="--site $(arg site_file)" output="screen" />
 
-  <node name="scout_imu_bridge" pkg="auto-scout" type="scout_imu_bridge.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+    <node name="scout_tof_bridge" pkg="auto-scout" type="scout_tof_bridge.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
-  <node name="scout_odom_bridge" pkg="auto-scout" type="scout_odom_bridge.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+    <node name="scout_imu_bridge" pkg="auto-scout" type="scout_imu_bridge.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
-  <node name="scout_battery_dock_guard" pkg="auto-scout" type="scout_battery_dock_guard.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+    <node name="scout_odom_bridge" pkg="auto-scout" type="scout_odom_bridge.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
-  <node name="scout_safety_filter" pkg="auto-scout" type="scout_safety_filter.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+    <node name="scout_battery_dock_guard" pkg="auto-scout" type="scout_battery_dock_guard.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
 
-  <node name="scout_motion_bridge" pkg="auto-scout" type="scout_motion_bridge.py"
-        args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+    <node name="scout_safety_filter" pkg="auto-scout" type="scout_safety_filter.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+
+    <node name="scout_motion_bridge" pkg="auto-scout" type="scout_motion_bridge.py"
+          args="--config $(arg config_file) --site $(arg site_file)" output="screen" />
+  </group>
 </launch>

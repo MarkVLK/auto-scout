@@ -107,7 +107,7 @@ After `/scan` is revalidated, opt back into autonomy by setting `AUTO_SCOUT_ENAB
 The Scout runtime now normalizes the built-in ToF and IMU topics before they are used by the rest of the stack:
 
 - `/SensorNode/tof` -> `/scout/tof` as `sensor_msgs/Range`, frame `tof_link`
-- `/SensorNode/imu` -> `/scout/imu/data` as `sensor_msgs/Imu`, frame `imu_link`
+- `/SensorNode/imu` -> `/scout/imu/data` as `sensor_msgs/Imu`, frame `imu_link`; by default this bridge caps output at 50 Hz to reduce Scout CPU load while preserving fresh IMU data for the rest of the stack
 - `/scout/safety_state` reports the current safety-filter state as JSON text
 - `/SensorNode/simple_battery_status` is watched by the Scout-local low-battery dock guard
 - `/scout/battery_guard_state` reports the battery guard mode as JSON text
@@ -123,7 +123,9 @@ Configured safety behavior lives under `safety` in `config/scout_config.yaml`. B
 
 This is not a camera/ToF/IMU navigation fallback. Full mapping and patrol still require a healthy `/scan` plus pose source. The built-in sensors add close-range safety and pose context while preserving the LD19 as the required obstacle/mapping sensor.
 
-The Scout also needs memory headroom. `./auto-scout deploy scout` installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap` using a setup service plus a systemd `.swap` unit. Live validation checks `/proc/swaps`, `free -m`, and recent OOM/SIGKILL log lines so memory pressure is visible before the kernel starts killing bridge processes again.
+The Scout also needs memory headroom. `./auto-scout deploy scout` installs a persistent 512 MiB swap file at `/userdata/auto-scout/auto-scout.swap` using a setup service plus a systemd `.swap` unit. It also installs `auto-scout-scout-resource-metrics.timer`, which writes lightweight snapshots every 15 minutes under `/userdata/auto-scout/resource-metrics`. Live validation checks `/proc/swaps`, `free -m`, `vmstat`, root disk free space, high Auto-Scout process CPU/RSS, and recent OOM/SIGKILL log lines so memory pressure is visible before the kernel starts killing bridge processes again.
+
+By default, Scout deploy runs `scout_core_runtime.py` instead of separate Python processes for heartbeat, ToF, IMU, odom/TF, battery guard, safety filter, and motion bridge. The LD19 driver and direct camera fallback remain separate when enabled. For rollback, set `AUTO_SCOUT_USE_CORE_RUNTIME=false` in the Scout service environment and restart `auto-scout-scout-runtime.service`.
 
 ## 6. Low-Battery Return-To-Dock
 
@@ -384,6 +386,12 @@ Confirm delivery with:
 
 ```bash
 ./auto-scout notify test
+```
+
+Companion deploy also installs `auto-scout-companion-resource-alert.timer` when notify is enabled. It checks Scout and Pi resource health every 15 minutes, stores cooldown state under `/srv/auto-scout/alert-state`, and posts Slack only for critical resource or service issues. When the check runs on the Pi, the Scout SSH target uses `roles.scout.ssh.host_key_alias` if set, so the Pi-local SSH config for `moorebot-scout.local` must remain valid. Swap-I/O alerts ignore the first `vmstat` since-boot row and require material interval churn. Test that path with:
+
+```bash
+./auto-scout notify resource-check --force-alert
 ```
 
 Slack webhook URLs are secrets, and Slack documents that leaked URLs may be

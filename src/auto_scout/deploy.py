@@ -29,6 +29,11 @@ ROS_LOG_MAX_BYTES = 100 * 1024 * 1024
 SCOUT_ROS_LOG_DIR = "/userdata/auto-scout/ros-logs"
 ROS_LOG_CLEANUP_SERVICE = "auto-scout-ros-log-cleanup.service"
 ROS_LOG_CLEANUP_TIMER = "auto-scout-ros-log-cleanup.timer"
+SCOUT_RESOURCE_METRICS_DIR = "/userdata/auto-scout/resource-metrics"
+SCOUT_RESOURCE_METRICS_SERVICE = "auto-scout-scout-resource-metrics.service"
+SCOUT_RESOURCE_METRICS_TIMER = "auto-scout-scout-resource-metrics.timer"
+COMPANION_RESOURCE_ALERT_SERVICE = "auto-scout-companion-resource-alert.service"
+COMPANION_RESOURCE_ALERT_TIMER = "auto-scout-companion-resource-alert.timer"
 SCOUT_SWAP_PATH = "/userdata/auto-scout/auto-scout.swap"
 SCOUT_SWAP_SIZE_MIB = 512
 SCOUT_SWAP_SETUP_SERVICE = "auto-scout-scout-swap-setup.service"
@@ -87,6 +92,7 @@ Environment=ROS_LOG_DIR={ros_log_dir}
 Environment=ROS_OS_OVERRIDE=debian:stretch
 Environment=AUTO_SCOUT_ENABLE_CAMERA=false
 Environment=AUTO_SCOUT_ENABLE_LIDAR=false
+Environment=AUTO_SCOUT_USE_CORE_RUNTIME=true
 ExecStart=/bin/bash -lc '{workspace_dir}/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5
@@ -203,6 +209,86 @@ WantedBy=timers.target
     )
 
 
+def _render_scout_resource_metrics_service(workspace_dir, service_user, service_group):
+    return """[Unit]
+Description=Collect Auto-Scout Scout resource metrics
+
+[Service]
+Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+User={service_user}
+Group={service_group}
+WorkingDirectory={workspace_dir}
+Environment=AUTO_SCOUT_RESOURCE_METRICS_DIR={metrics_dir}
+ExecStart=/bin/bash -lc '{workspace_dir}/scripts/collect_scout_resource_metrics.sh'
+""".format(
+        service_user=service_user,
+        service_group=service_group,
+        workspace_dir=workspace_dir,
+        metrics_dir=SCOUT_RESOURCE_METRICS_DIR,
+    )
+
+
+def _render_scout_resource_metrics_timer():
+    return """[Unit]
+Description=Run Auto-Scout Scout resource metrics collection
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+Unit={service_name}
+
+[Install]
+WantedBy=timers.target
+""".format(
+        service_name=SCOUT_RESOURCE_METRICS_SERVICE,
+    )
+
+
+def _render_companion_resource_alert_service(workspace_dir, service_user, service_group, alert_state_dir):
+    site_path = remote_site_config_path(workspace_dir)
+    return """[Unit]
+Description=Send Auto-Scout critical resource alerts
+
+[Service]
+Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+User={service_user}
+Group={service_group}
+WorkingDirectory={workspace_dir}
+Environment=AUTO_SCOUT_SITE_CONFIG={site_path}
+ExecStart=/bin/bash -lc '{workspace_dir}/auto-scout --site {site_path} notify resource-check --local-companion --quiet --state-dir {alert_state_dir}'
+""".format(
+        service_user=service_user,
+        service_group=service_group,
+        workspace_dir=workspace_dir,
+        site_path=site_path,
+        alert_state_dir=alert_state_dir,
+    )
+
+
+def _render_companion_resource_alert_timer():
+    return """[Unit]
+Description=Run Auto-Scout critical resource alert checks
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=15min
+Persistent=true
+Unit={service_name}
+
+[Install]
+WantedBy=timers.target
+""".format(
+        service_name=COMPANION_RESOURCE_ALERT_SERVICE,
+    )
+
+
 def _render_scout_swap_setup_service():
     return """[Unit]
 Description=Prepare Auto-Scout Scout swap file
@@ -287,14 +373,23 @@ def _install_service_commands(service_name, remote_temp_path):
     ]
 
 
-def _install_timer_commands(service_temp_path, timer_temp_path):
+def _install_named_timer_commands(service_name, timer_name, service_temp_path, timer_temp_path):
     return [
-        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(service_temp_path, ROS_LOG_CLEANUP_SERVICE),
-        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(timer_temp_path, ROS_LOG_CLEANUP_TIMER),
+        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(service_temp_path, service_name),
+        "sudo install -m 0644 '{}' '/etc/systemd/system/{}'".format(timer_temp_path, timer_name),
         "rm -f '{}' '{}'".format(service_temp_path, timer_temp_path),
         "sudo systemctl daemon-reload",
-        "sudo systemctl enable --now {}".format(ROS_LOG_CLEANUP_TIMER),
+        "sudo systemctl enable --now {}".format(timer_name),
     ]
+
+
+def _install_timer_commands(service_temp_path, timer_temp_path):
+    return _install_named_timer_commands(
+        ROS_LOG_CLEANUP_SERVICE,
+        ROS_LOG_CLEANUP_TIMER,
+        service_temp_path,
+        timer_temp_path,
+    )
 
 
 def _install_swap_commands(setup_temp_path, swap_temp_path):
@@ -360,6 +455,62 @@ def _install_scout_swap(runner, target_root):
         runner.run_remote(target_root, command)
 
 
+def _install_scout_resource_metrics(runner, target_root, workspace_dir, service_user, service_group):
+    service_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        SCOUT_RESOURCE_METRICS_SERVICE,
+        _render_scout_resource_metrics_service(workspace_dir, service_user, service_group),
+    )
+    timer_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        SCOUT_RESOURCE_METRICS_TIMER,
+        _render_scout_resource_metrics_timer(),
+    )
+    for command in _install_named_timer_commands(
+        SCOUT_RESOURCE_METRICS_SERVICE,
+        SCOUT_RESOURCE_METRICS_TIMER,
+        service_temp,
+        timer_temp,
+    ):
+        runner.run_remote(target_root, command)
+
+
+def _install_companion_resource_alerts(runner, target_root, workspace_dir, service_user, service_group, alert_state_dir):
+    service_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        COMPANION_RESOURCE_ALERT_SERVICE,
+        _render_companion_resource_alert_service(workspace_dir, service_user, service_group, alert_state_dir),
+    )
+    timer_temp = _copy_service_to_remote(
+        runner,
+        target_root,
+        COMPANION_RESOURCE_ALERT_TIMER,
+        _render_companion_resource_alert_timer(),
+    )
+    for command in _install_named_timer_commands(
+        COMPANION_RESOURCE_ALERT_SERVICE,
+        COMPANION_RESOURCE_ALERT_TIMER,
+        service_temp,
+        timer_temp,
+    ):
+        runner.run_remote(target_root, command)
+
+
+def _disable_companion_resource_alerts(runner, target_root):
+    for command in [
+        "sudo systemctl disable --now {} 2>/dev/null || true".format(COMPANION_RESOURCE_ALERT_TIMER),
+        "sudo rm -f '/etc/systemd/system/{}' '/etc/systemd/system/{}'".format(
+            COMPANION_RESOURCE_ALERT_SERVICE,
+            COMPANION_RESOURCE_ALERT_TIMER,
+        ),
+        "sudo systemctl daemon-reload",
+    ]:
+        runner.run_remote(target_root, command)
+
+
 def deploy_scout(site_config, artifact_run, dry_run=False):
     """Sync the repo and install the Scout runtime service."""
     runner = CommandRunner(artifact_run=artifact_run, dry_run=dry_run)
@@ -373,6 +524,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
 
     _prepare_remote_workspace(runner, target_root, workspace_dir, service_user, service_group)
     _prepare_remote_directory(runner, target_root, ros_log_dir, service_user, service_group)
+    _prepare_remote_directory(runner, target_root, SCOUT_RESOURCE_METRICS_DIR, service_user, service_group)
     runner.rsync_to_remote(
         target_root,
         "{}/".format(repo_root()),
@@ -395,6 +547,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         legacy_log_dirs=["/home/{}/.ros/log".format(service_user)],
     )
     _install_scout_swap(runner, target_root)
+    _install_scout_resource_metrics(runner, target_root, workspace_dir, service_user, service_group)
 
     return {
         "role": "scout",
@@ -404,6 +557,7 @@ def deploy_scout(site_config, artifact_run, dry_run=False):
         "workspace_dir": workspace_dir,
         "host": target_root["host"],
         "ros_log_dir": ros_log_dir,
+        "resource_metrics_dir": SCOUT_RESOURCE_METRICS_DIR,
         "swap_path": SCOUT_SWAP_PATH,
         "swap_unit": SCOUT_SWAP_UNIT,
         "remote_site_path": remote_site_config_path(workspace_dir),
@@ -423,11 +577,16 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
     service_user, service_group = role_service_identity(companion)
     service_text = _render_companion_service(companion, scout)
     ros_log_dir = "{}/ros-logs".format(companion_storage_root(companion))
+    alert_state_dir = "{}/alert-state".format(companion_storage_root(companion))
+    notify_enabled = bool(companion.get("capabilities", {}).get("notify", False))
+    notify_webhook = str(companion.get("notifications", {}).get("webhook_url") or "").strip()
 
     _prepare_remote_workspace(runner, target_root, workspace_dir, service_user, service_group)
     for path in storage.values():
         _prepare_remote_directory(runner, target_root, path, service_user, service_group)
     _prepare_remote_directory(runner, target_root, ros_log_dir, service_user, service_group)
+    if notify_enabled and notify_webhook:
+        _prepare_remote_directory(runner, target_root, alert_state_dir, service_user, service_group)
     runner.rsync_to_remote(
         target_root,
         "{}/".format(repo_root()),
@@ -454,6 +613,17 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         ros_log_dir,
         legacy_log_dirs=["/home/{}/.ros/log".format(service_user)],
     )
+    if notify_enabled and notify_webhook:
+        _install_companion_resource_alerts(
+            runner,
+            target_root,
+            workspace_dir,
+            service_user,
+            service_group,
+            alert_state_dir,
+        )
+    else:
+        _disable_companion_resource_alerts(runner, target_root)
 
     return {
         "role": "companion",
@@ -464,6 +634,8 @@ def deploy_companion(site_config, artifact_run, dry_run=False):
         "host": target_root["host"],
         "storage_root": companion_storage_root(companion),
         "ros_log_dir": ros_log_dir,
+        "resource_alert_state_dir": alert_state_dir if notify_enabled and notify_webhook else None,
+        "resource_alert_timer": COMPANION_RESOURCE_ALERT_TIMER if notify_enabled and notify_webhook else None,
         "remote_site_path": remote_site_config_path(workspace_dir),
         "dry_run": dry_run,
     }

@@ -27,6 +27,10 @@ from auto_scout.deploy import _render_companion_service
 from auto_scout.deploy import _install_swap_commands
 from auto_scout.deploy import _render_ros_log_cleanup_service
 from auto_scout.deploy import _render_ros_log_cleanup_timer
+from auto_scout.deploy import _render_scout_resource_metrics_service
+from auto_scout.deploy import _render_scout_resource_metrics_timer
+from auto_scout.deploy import _render_companion_resource_alert_service
+from auto_scout.deploy import _render_companion_resource_alert_timer
 from auto_scout.deploy import _render_scout_service
 from auto_scout.deploy import _render_scout_swap_setup_service
 from auto_scout.deploy import _render_scout_swap_unit
@@ -428,6 +432,85 @@ class ValidationCliTest(unittest.TestCase):
         self.assertNotIn("https://notify.example.test/auto-scout", stdout.getvalue())
         self.assertTrue(artifact_runs[0].json["notify-test-report.json"]["sent"])
 
+    def test_cli_notify_resource_check_posts_critical_alert(self):
+        artifact_runs = []
+
+        class FakeArtifactRun:
+            def __init__(self, name):
+                self.name = name
+                self.json = {}
+                artifact_runs.append(self)
+
+            def write_json(self, name, payload):
+                self.json[name] = payload
+
+            def write_text(self, name, content):
+                pass
+
+            def log(self, message):
+                pass
+
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        health = {
+            "scout": {
+                "ok": False,
+                "alerts": [
+                    {
+                        "id": "scout_low_memory",
+                        "severity": "critical",
+                        "summary": "Scout available memory is low",
+                        "detail": "120 MiB available",
+                    }
+                ],
+                "evidence": {},
+            },
+            "companion": {"ok": True, "alerts": [], "evidence": {}},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_path = Path(temp_dir) / "site.yaml"
+            state_dir = Path(temp_dir) / "alert-state"
+            site_config = default_site_config()
+            site_config["roles"]["companion"]["capabilities"]["notify"] = True
+            site_config["roles"]["companion"]["notifications"]["webhook_url"] = "https://notify.example.test/auto-scout"
+            write_yaml(site_path, site_config)
+            posts = []
+            stdout = io.StringIO()
+
+            def fake_post(url, payload, timeout=None):
+                posts.append({"url": url, "json": payload, "timeout": timeout})
+                return FakeResponse()
+
+            with patch.object(cli, "ArtifactRun", FakeArtifactRun):
+                with patch.object(cli, "collect_resource_health", return_value=health):
+                    with patch.object(cli, "_post_json", side_effect=fake_post):
+                        with redirect_stdout(stdout):
+                            return_code = cli.main(
+                                [
+                                    "--site",
+                                    str(site_path),
+                                    "notify",
+                                    "resource-check",
+                                    "--state-dir",
+                                    str(state_dir),
+                                ]
+                            )
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(return_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["resource_ok"])
+        self.assertTrue(payload["sent"])
+        self.assertEqual(posts[0]["url"], "https://notify.example.test/auto-scout")
+        self.assertEqual(posts[0]["json"]["text"], "Auto-Scout resource alert: critical")
+        self.assertNotIn("https://notify.example.test/auto-scout", stdout.getvalue())
+        self.assertTrue(artifact_runs[0].json["resource-alert-report.json"]["sent"])
+
     def test_cli_configure_companion_prompt_accepts_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             site_path = Path(temp_dir) / "site.yaml"
@@ -511,6 +594,109 @@ class ValidationCliTest(unittest.TestCase):
         self.assertEqual(checks["runtime.mission_house_mapping"]["status"], "skip")
         self.assertEqual(checks["runtime.mission_room_patrol"]["status"], "skip")
         self.assertEqual(checks["runtime.mission_smoke_loop"]["status"], "skip")
+
+    def test_scout_memory_pressure_warns_on_resource_thresholds(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ssh"]["host"] = "moorebot-scout.local"
+        output = """__FREE__
+              total        used        free      shared  buff/cache   available
+Mem:            955         820          20           3         115         120
+Swap:           511         247         263
+__SWAPS__
+Filename                                Type            Size    Used    Priority
+/userdata/auto-scout/auto-scout.swap    file            523840  253756  -1
+__VMSTAT__
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 253756  44104  80340 197616   10    2     0    48 11053 11136 29 15 55  0  0
+__DF__
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root      2457600 2257600    200000      92% /
+__PS__
+  PID COMMAND         %CPU   RSS COMMAND
+ 7071 python2         65.1 53036 python2 /userdata/catkin_ws/src/auto-scout/src/scout_imu_bridge.py
+__OOM__
+"""
+
+        class FakeResult:
+            ok = True
+            stdout = output
+            stderr = ""
+
+        class FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, command, check=False):
+                return FakeResult()
+
+        report = validator.ReportBuilder("runtime", "operator_host", "system")
+        original_executor = validator.ProbeExecutor
+        try:
+            validator.ProbeExecutor = FakeExecutor
+            validator._add_scout_memory_pressure_check(report, site_config, "operator_host", live_probe_enabled=True)
+        finally:
+            validator.ProbeExecutor = original_executor
+
+        payload = report.build()
+        check = payload["checks"][0]
+        self.assertEqual(check["status"], "warn")
+        self.assertEqual(check["evidence"]["available_memory_mib"], 120)
+        self.assertEqual(check["evidence"]["max_swap_in_kib_per_second"], 10)
+        self.assertEqual(check["evidence"]["max_swap_out_kib_per_second"], 2)
+        self.assertEqual(check["evidence"]["root_free_mib"], 195)
+        self.assertTrue(any("scout_imu_bridge" in detail for detail in check["details"]))
+
+    def test_scout_memory_pressure_ignores_oom_markers_outside_oom_section(self):
+        site_config = default_site_config()
+        site_config["roles"]["scout"]["ssh"]["host"] = "moorebot-scout.local"
+        output = """__FREE__
+              total        used        free      shared  buff/cache   available
+Mem:            955         632          53          13         270         295
+Swap:           511         252         258
+__SWAPS__
+Filename                                Type            Size    Used    Priority
+/userdata/auto-scout/auto-scout.swap    file            523840  258960  -1
+__VMSTAT__
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 258960  54632  79928 196760    0    0     0    13   12   17 26 13 61  0  0
+__DF__
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root      2515696 1876484    501976      79% /
+__PS__
+  PID COMMAND         %CPU   RSS COMMAND
+26313 bash             3.6  3380 /bin/bash -lc ps ... auto-scout ... grep -E 'Out of memory|oom-killer|Killed process|exit code -9'
+__OOM__
+"""
+
+        class FakeResult:
+            ok = True
+            stdout = output
+            stderr = ""
+
+        class FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def run(self, command, check=False):
+                return FakeResult()
+
+        report = validator.ReportBuilder("runtime", "operator_host", "system")
+        original_executor = validator.ProbeExecutor
+        try:
+            validator.ProbeExecutor = FakeExecutor
+            validator._add_scout_memory_pressure_check(report, site_config, "operator_host", live_probe_enabled=True)
+        finally:
+            validator.ProbeExecutor = original_executor
+
+        payload = report.build()
+        check = payload["checks"][0]
+        self.assertEqual(check["status"], "pass")
+        self.assertEqual(check["evidence"]["available_memory_mib"], 295)
+        self.assertEqual(check["evidence"]["max_swap_in_kib_per_second"], 0)
+        self.assertEqual(check["evidence"]["max_swap_out_kib_per_second"], 0)
+        self.assertEqual(check["evidence"]["root_free_mib"], 490)
 
     def test_default_site_config_uses_diff_drive_model_and_placeholder_hosts(self):
         site_config = default_site_config()
@@ -813,6 +999,41 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn("stat -c '%a' '/userdata/auto-scout/auto-scout.swap'", install_commands)
         self.assertIn("/sbin/blkid -o value -s TYPE '/userdata/auto-scout/auto-scout.swap'", install_commands)
 
+    def test_rendered_scout_resource_metrics_units_collect_periodic_snapshots(self):
+        service_text = _render_scout_resource_metrics_service(
+            "/userdata/catkin_ws/src/auto-scout",
+            "linaro",
+            "linaro",
+        )
+        timer_text = _render_scout_resource_metrics_timer()
+        script_text = (REPO_ROOT / "scripts" / "collect_scout_resource_metrics.sh").read_text(encoding="utf-8")
+
+        self.assertIn("Environment=AUTO_SCOUT_RESOURCE_METRICS_DIR=/userdata/auto-scout/resource-metrics", service_text)
+        self.assertIn("scripts/collect_scout_resource_metrics.sh", service_text)
+        self.assertIn("Nice=10", service_text)
+        self.assertIn("OnBootSec=10min", timer_text)
+        self.assertIn("OnUnitActiveSec=15min", timer_text)
+        self.assertIn("Persistent=true", timer_text)
+        self.assertIn("vmstat 1 3", script_text)
+        self.assertIn("ps -eo pid,ppid,comm,%cpu,%mem,rss,args", script_text)
+        self.assertIn("find \"${METRICS_DIR}\"", script_text)
+
+    def test_rendered_companion_resource_alert_units_run_notify_check(self):
+        service_text = _render_companion_resource_alert_service(
+            "/home/automark/auto-scout",
+            "automark",
+            "automark",
+            "/srv/auto-scout/alert-state",
+        )
+        timer_text = _render_companion_resource_alert_timer()
+
+        self.assertIn("notify resource-check --local-companion --quiet", service_text)
+        self.assertIn("--state-dir /srv/auto-scout/alert-state", service_text)
+        self.assertIn("Nice=10", service_text)
+        self.assertIn("OnBootSec=15min", timer_text)
+        self.assertIn("OnUnitActiveSec=15min", timer_text)
+        self.assertIn("Persistent=true", timer_text)
+
     def test_service_rendering_fails_fast_on_placeholder_ros_endpoints(self):
         site_config = default_site_config()
         site_config["roles"]["scout"]["motion"]["drive_model"] = "diff"
@@ -870,8 +1091,10 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn('export ROS_OS_OVERRIDE="${ROS_OS_OVERRIDE:-debian:stretch}"', scout_start_script)
         self.assertIn('CAMERA_ENABLED="${AUTO_SCOUT_ENABLE_CAMERA:-false}"', scout_start_script)
         self.assertIn('LIDAR_ENABLED="${AUTO_SCOUT_ENABLE_LIDAR:-false}"', scout_start_script)
+        self.assertIn('CORE_RUNTIME_ENABLED="${AUTO_SCOUT_USE_CORE_RUNTIME:-true}"', scout_start_script)
         self.assertIn('enable_camera:="${CAMERA_ENABLED}"', scout_start_script)
         self.assertIn('enable_lidar:="${LIDAR_ENABLED}"', scout_start_script)
+        self.assertIn('use_core_runtime:="${CORE_RUNTIME_ENABLED}"', scout_start_script)
         self.assertIn("require_env AUTO_SCOUT_ROS_MASTER_URI", start_script)
         self.assertIn("require_ros_advertise_env", start_script)
         self.assertIn("AUTO_SCOUT_ROS_HOSTNAME or AUTO_SCOUT_ROS_IP must be set", start_script)
@@ -883,7 +1106,10 @@ class ValidationCliTest(unittest.TestCase):
         self.assertIn('<arg name="enable_nav_stack" default="false" />', companion_launch)
         self.assertIn('<group if="$(arg enable_nav_stack)">', companion_launch)
         self.assertIn('<arg name="enable_lidar" default="false" />', scout_runtime_launch)
+        self.assertIn('<arg name="use_core_runtime" default="true" />', scout_runtime_launch)
+        self.assertIn('name="scout_core_runtime"', scout_runtime_launch)
         self.assertIn('if="$(arg enable_lidar)"', scout_runtime_launch)
+        self.assertIn('unless="$(arg use_core_runtime)"', scout_runtime_launch)
         self.assertIn('name="battery_map_return_controller"', companion_launch)
         self.assertIn('name="vendor_jpg_bridge"', companion_launch)
         self.assertIn('<arg name="odom_model_type" default="$(optenv AUTO_SCOUT_ODOM_MODEL_TYPE diff)"/>', navigation_launch)

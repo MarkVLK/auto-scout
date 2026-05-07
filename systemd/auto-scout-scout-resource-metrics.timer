@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Auto-Scout Scout resource metrics collection
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=auto-scout-scout-resource-metrics.service
+
+[Install]
+WantedBy=timers.target

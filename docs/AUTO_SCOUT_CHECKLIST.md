@@ -1,7 +1,7 @@
 # Auto-Scout Project Checklist
 
 Generated after architecture review session: April 2026.
-Last Codex update: 2026-04-30.
+Last Codex update: 2026-05-05.
 
 Reference this when resuming work. Items are ordered by dependency.
 
@@ -80,6 +80,25 @@ Reference this when resuming work. Items are ordered by dependency.
   - The setup service retains the existing `/userdata/auto-scout/auto-scout.swap` file, creates it as 512 MiB if missing, sets mode `600`, and runs `mkswap` only when the file is not already formatted as swap
   - Deploy enables the swap unit for reboot persistence and validates `/proc/swaps`, permissions, and swap formatting
   - Runtime validation now checks `free -m`, `/proc/swaps`, and recent OOM/SIGKILL log lines on the Scout during live validation
+- [x] Scout resource snapshots implemented in the repo
+  - 2026-05-05 implementation: deploy installs `auto-scout-scout-resource-metrics.service` plus `auto-scout-scout-resource-metrics.timer`
+  - Metrics snapshots are written under `/userdata/auto-scout/resource-metrics` every 15 minutes and retained for 14 days by default
+  - Snapshots include uptime/load, memory, swap, `vmstat`, root and `/userdata` disk use, top RSS/CPU processes, and Auto-Scout process details
+  - Runtime validation now warns on material interval swap I/O, low available memory, low root disk free space, and high Auto-Scout process CPU/RSS
+- [x] Scout IMU bridge CPU load reduced
+  - 2026-05-05 implementation: `/scout/imu/data` defaults to a 50 Hz output cap through `imu.output_hz`
+  - IMU and ToF bridge hot paths now construct normalized messages explicitly instead of using `deepcopy`
+  - Live post-deploy check: the legacy `scout_imu_bridge.py` process is no longer present under the core runtime, `scout_core_runtime.py` was about 55 MiB RSS and roughly 39-40% CPU in the sample, `/scout/imu/data` published around 37-47 Hz after reboot, and steady-state swap churn cleared after boot settled
+- [x] Critical Slack resource alerts added on the companion
+  - 2026-05-05 implementation: `./auto-scout notify resource-check` checks Scout and Pi health and posts through the configured companion Slack webhook only for critical resource/service conditions
+  - Companion deploy installs `auto-scout-companion-resource-alert.service` plus `auto-scout-companion-resource-alert.timer` when notify is enabled and a webhook URL is configured
+  - Alert cooldown state is stored under `/srv/auto-scout/alert-state`; expected no-LD19/no-nav holding-mode skips are not Slack alerts
+  - 2026-05-06 live rollout fix: Pi-local resource checks target the Scout via `roles.scout.ssh.host_key_alias` so the Pi's `~/.ssh/config` key selection for `moorebot-scout.local` works under systemd; swap-I/O alerts ignore the first `vmstat` since-boot row and require material interval churn
+- [x] Feature-gated Scout core runtime added
+  - 2026-05-05 implementation: `scout_core_runtime.py` consolidates heartbeat, ToF, IMU, odom/TF, battery guard, safety filter, and motion bridge into one Scout-side process
+  - `AUTO_SCOUT_USE_CORE_RUNTIME=true` is the deploy default; set it to `false` and restart `auto-scout-scout-runtime.service` to roll back to the legacy per-node launch path
+  - LD19 and direct camera remain separate processes when re-enabled
+  - 2026-05-06 live reboot check: Scout came back with persistent swap, the metrics timer, and one `scout_core_runtime.py` process; `/scout/imu/data`, `/scout/tof`, `/odom`, `/tf`, safety state, battery guard state, `/scout/cmd_vel_companion`, and `/cmd_vel_force` were live
 
 ### Still To Do on Scout
 - [ ] Print/install the permanent LD19 fixture and lock down the LiDAR cabling
@@ -96,12 +115,13 @@ Reference this when resuming work. Items are ordered by dependency.
 
 - [ ] After redeploying the Scout runtime, verify built-in sensor bridges and safety state live
   ```bash
+  pgrep -af scout_core_runtime.py
   rostopic info /scout/tof
   rostopic info /scout/imu/data
   rostopic echo -n 3 /scout/safety_state
   timeout 5s rostopic echo -n 1 /scout/cmd_vel_companion
   ```
-  Confirm `/scout_tof_bridge`, `/scout_imu_bridge`, and `/scout_safety_filter` are present in `rosnode list`.
+  Confirm `rosnode list` includes `/scout_core_runtime` on the default path. If rolling back with `AUTO_SCOUT_USE_CORE_RUNTIME=false`, confirm `/scout_tof_bridge`, `/scout_imu_bridge`, and `/scout_safety_filter` are present instead.
   With no active planner running, `/scout/safety_state` may report a blocked scan or ToF state, but `/scout/cmd_vel_companion` should time out without periodic zero Twist output.
 
 - [ ] After redeploying the Scout runtime, passively verify battery guard and vendor docking surfaces

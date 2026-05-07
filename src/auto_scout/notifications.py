@@ -58,6 +58,31 @@ def build_test_notification_payload(message=None, timestamp=None):
     return _payload(text, fields)
 
 
+def build_resource_alert_payload(report, forced=False):
+    """Return a Slack-compatible payload for resource health alerts."""
+    payload = report if isinstance(report, dict) else {}
+    alerts = payload.get("alerts", []) if isinstance(payload.get("alerts", []), list) else []
+    status = str(payload.get("status") or ("critical" if alerts else "ok"))
+    title = "Auto-Scout resource alert: {}".format(status)
+    if forced and not alerts:
+        title = "Auto-Scout resource check test: ok"
+    elif not alerts:
+        title = "Auto-Scout resource alert recovered"
+
+    fields = [
+        _field("Status", status),
+        _field("Alert count", len(alerts)),
+        _field("Timestamp", payload.get("timestamp")),
+    ]
+    for alert in alerts[:7]:
+        if not isinstance(alert, dict):
+            continue
+        fields.append(_field(alert.get("summary", "Alert"), alert.get("detail", "")))
+    if len(alerts) > 7:
+        fields.append(_field("Additional alerts", len(alerts) - 7))
+    return _payload(title, fields)
+
+
 def _payload(title, fields):
     filtered_fields = [item for item in fields if item is not None]
     blocks = [

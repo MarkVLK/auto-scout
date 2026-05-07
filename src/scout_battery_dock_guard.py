@@ -7,9 +7,9 @@ import argparse
 import json
 import math
 
-from config_utils import load_scout_config
-from scout_runtime_config import load_site_config
 from scout_runtime_config import scout_runtime_topic
+from scout_node_utils import load_runtime_configs
+from scout_node_utils import private_param
 
 
 MODE_IDLE = "idle"
@@ -236,7 +236,15 @@ class ScoutBatteryDockGuardLogic(object):
 class ScoutBatteryDockGuardNode(object):
     """ROS wrapper for the Scout-local low-battery docking guard."""
 
-    def __init__(self, config_path=None, site_path=None):
+    def __init__(
+        self,
+        config_path=None,
+        site_path=None,
+        config=None,
+        site_config=None,
+        init_node=True,
+        param_prefix=None,
+    ):
         try:
             import rospy
             from std_msgs.msg import Int32
@@ -252,56 +260,81 @@ class ScoutBatteryDockGuardNode(object):
         self.BatteryStatus = BatteryStatus
         self.nav_low_bat = nav_low_bat
 
-        rospy.init_node("scout_battery_dock_guard", anonymous=False)
-        config_path = rospy.get_param("~config_file", config_path)
-        site_path = rospy.get_param("~site_file", site_path)
-        self.config, self.config_path = load_scout_config(config_path)
-        self.site_config, self.site_path = load_site_config(site_path)
+        if init_node:
+            rospy.init_node("scout_battery_dock_guard", anonymous=False)
+        self.config, self.config_path, self.site_config, self.site_path = load_runtime_configs(
+            rospy,
+            config_path=config_path,
+            site_path=site_path,
+            config=config,
+            site_config=site_config,
+            param_prefix=param_prefix,
+        )
         safety = self.config.get("safety", {})
 
-        self.enabled = _as_bool(rospy.get_param("~enabled", safety.get("battery_guard_enabled", True)), True)
-        self.dry_run = _as_bool(rospy.get_param("~dry_run", safety.get("battery_guard_dry_run", False)), False)
+        self.enabled = _as_bool(
+            rospy.get_param(private_param(param_prefix, "enabled"), safety.get("battery_guard_enabled", True)),
+            True,
+        )
+        self.dry_run = _as_bool(
+            rospy.get_param(private_param(param_prefix, "dry_run"), safety.get("battery_guard_dry_run", False)),
+            False,
+        )
         self.logic = ScoutBatteryDockGuardLogic(
-            min_battery_level=rospy.get_param("~min_battery_level", safety.get("min_battery_level", 20.0)),
+            min_battery_level=rospy.get_param(
+                private_param(param_prefix, "min_battery_level"),
+                safety.get("min_battery_level", 20.0),
+            ),
             critical_battery_level=rospy.get_param(
-                "~critical_battery_level",
+                private_param(param_prefix, "critical_battery_level"),
                 safety.get("critical_battery_level", 10.0),
             ),
-            battery_reset_margin=rospy.get_param("~battery_reset_margin", safety.get("battery_reset_margin", 5.0)),
+            battery_reset_margin=rospy.get_param(
+                private_param(param_prefix, "battery_reset_margin"),
+                safety.get("battery_reset_margin", 5.0),
+            ),
             map_return_claim_timeout_seconds=rospy.get_param(
-                "~map_return_claim_timeout_seconds",
+                private_param(param_prefix, "map_return_claim_timeout_seconds"),
                 safety.get("map_return_claim_timeout_seconds", 5.0),
             ),
             map_return_timeout_seconds=rospy.get_param(
-                "~map_return_timeout_seconds",
+                private_param(param_prefix, "map_return_timeout_seconds"),
                 safety.get("map_return_timeout_seconds", 180.0),
             ),
-            dock_timeout_seconds=rospy.get_param("~dock_timeout_seconds", safety.get("dock_timeout_seconds", 180.0)),
-            dock_retry_count=rospy.get_param("~dock_retry_count", safety.get("dock_retry_count", 1)),
+            dock_timeout_seconds=rospy.get_param(
+                private_param(param_prefix, "dock_timeout_seconds"),
+                safety.get("dock_timeout_seconds", 180.0),
+            ),
+            dock_retry_count=rospy.get_param(
+                private_param(param_prefix, "dock_retry_count"),
+                safety.get("dock_retry_count", 1),
+            ),
         )
 
         self.battery_topic = rospy.get_param(
-            "~battery_topic",
+            private_param(param_prefix, "battery_topic"),
             scout_runtime_topic(self.site_config, self.config, "battery_status", "/SensorNode/simple_battery_status"),
         )
         self.vendor_status_topic = rospy.get_param(
-            "~vendor_status_topic",
+            private_param(param_prefix, "vendor_status_topic"),
             scout_runtime_topic(self.site_config, self.config, "vendor_dock_status", "/CoreNode/going_home_status"),
         )
         self.state_topic = rospy.get_param(
-            "~state_topic",
+            private_param(param_prefix, "state_topic"),
             scout_runtime_topic(self.site_config, self.config, "battery_guard_state", "/scout/battery_guard_state"),
         )
         self.control_topic = rospy.get_param(
-            "~control_topic",
+            private_param(param_prefix, "control_topic"),
             scout_runtime_topic(self.site_config, self.config, "battery_guard_control", "/scout/battery_guard_control"),
         )
         self.runtime_request_topic = rospy.get_param(
-            "~runtime_request_topic",
+            private_param(param_prefix, "runtime_request_topic"),
             scout_runtime_topic(self.site_config, self.config, "runtime_request", "/scout/runtime/request"),
         )
-        self.vendor_dock_service = rospy.get_param("~vendor_dock_service", "/nav_low_bat")
-        self.publish_hz = float(rospy.get_param("~publish_hz", safety.get("battery_guard_publish_hz", 1.0)))
+        self.vendor_dock_service = rospy.get_param(private_param(param_prefix, "vendor_dock_service"), "/nav_low_bat")
+        self.publish_hz = float(
+            rospy.get_param(private_param(param_prefix, "publish_hz"), safety.get("battery_guard_publish_hz", 1.0))
+        )
 
         self.state_pub = rospy.Publisher(self.state_topic, String, queue_size=1, latch=True)
         self.battery_sub = rospy.Subscriber(self.battery_topic, BatteryStatus, self.battery_callback, queue_size=1)
@@ -375,7 +408,7 @@ class ScoutBatteryDockGuardNode(object):
         payload = {"action": "start_vendor_dock", "reason": "runtime_request"}
         self._run_actions(self.logic.handle_control(payload, self._now_seconds()))
 
-    def run(self):
+    def log_active(self):
         self.rospy.loginfo(
             "Scout battery dock guard active: battery=%s state=%s control=%s vendor_status=%s",
             self.battery_topic,
@@ -383,10 +416,16 @@ class ScoutBatteryDockGuardNode(object):
             self.control_topic,
             self.vendor_status_topic,
         )
+
+    def tick(self, event=None):
+        if self.enabled:
+            self._run_actions(self.logic.tick(self._now_seconds()))
+
+    def run(self):
+        self.log_active()
         rate = self.rospy.Rate(self.publish_hz)
         while not self.rospy.is_shutdown():
-            if self.enabled:
-                self._run_actions(self.logic.tick(self._now_seconds()))
+            self.tick()
             rate.sleep()
 
 

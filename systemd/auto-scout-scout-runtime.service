@@ -20,6 +20,7 @@ Environment=ROS_LOG_DIR=/userdata/auto-scout/ros-logs
 Environment=ROS_OS_OVERRIDE=debian:stretch
 Environment=AUTO_SCOUT_ENABLE_CAMERA=false
 Environment=AUTO_SCOUT_ENABLE_LIDAR=false
+Environment=AUTO_SCOUT_USE_CORE_RUNTIME=true
 ExecStart=/bin/bash -lc '/userdata/catkin_ws/src/auto-scout/scripts/start_scout_runtime.sh'
 Restart=always
 RestartSec=5

@@ -7,9 +7,9 @@ import argparse
 import json
 import math
 
-from config_utils import load_scout_config
-from scout_runtime_config import load_site_config
 from scout_runtime_config import scout_runtime_topic
+from scout_node_utils import load_runtime_configs
+from scout_node_utils import private_param
 
 
 def _as_bool(value, default=False):
@@ -316,7 +316,15 @@ class ScoutCommandPublishPolicy(object):
 class ScoutSafetyFilterNode(object):
     """ROS node that publishes only commands allowed by Scout-local safety checks."""
 
-    def __init__(self, config_path=None, site_path=None):
+    def __init__(
+        self,
+        config_path=None,
+        site_path=None,
+        config=None,
+        site_config=None,
+        init_node=True,
+        param_prefix=None,
+    ):
         try:
             import rospy
             from geometry_msgs.msg import Twist
@@ -329,62 +337,88 @@ class ScoutSafetyFilterNode(object):
         self.rospy = rospy
         self.Twist = Twist
         self.String = String
-        rospy.init_node("scout_safety_filter", anonymous=False)
-        config_path = rospy.get_param("~config_file", config_path)
-        site_path = rospy.get_param("~site_file", site_path)
-        self.config, self.config_path = load_scout_config(config_path)
-        self.site_config, self.site_path = load_site_config(site_path)
+        if init_node:
+            rospy.init_node("scout_safety_filter", anonymous=False)
+        self.config, self.config_path, self.site_config, self.site_path = load_runtime_configs(
+            rospy,
+            config_path=config_path,
+            site_path=site_path,
+            config=config,
+            site_config=site_config,
+            param_prefix=param_prefix,
+        )
 
         safety = self.config.get("safety", {})
         self.logic = ScoutSafetyLogic(
             twist_type=Twist,
-            tof_stop_enabled=_as_bool(rospy.get_param("~tof_stop_enabled", safety.get("tof_stop_enabled", True))),
-            require_tof=_as_bool(rospy.get_param("~require_tof", safety.get("require_tof", False))),
-            max_obstacle_distance=rospy.get_param("~max_obstacle_distance", safety.get("max_obstacle_distance", 0.3)),
+            tof_stop_enabled=_as_bool(
+                rospy.get_param(private_param(param_prefix, "tof_stop_enabled"), safety.get("tof_stop_enabled", True))
+            ),
+            require_tof=_as_bool(
+                rospy.get_param(private_param(param_prefix, "require_tof"), safety.get("require_tof", False))
+            ),
+            max_obstacle_distance=rospy.get_param(
+                private_param(param_prefix, "max_obstacle_distance"),
+                safety.get("max_obstacle_distance", 0.3),
+            ),
             emergency_stop_distance=rospy.get_param(
-                "~emergency_stop_distance",
+                private_param(param_prefix, "emergency_stop_distance"),
                 safety.get("emergency_stop_distance", 0.15),
             ),
-            tof_stale_timeout=rospy.get_param("~tof_stale_timeout", safety.get("tof_stale_timeout", 1.0)),
-            scan_watchdog_enabled=_as_bool(
-                rospy.get_param("~scan_watchdog_enabled", safety.get("scan_watchdog_enabled", True))
+            tof_stale_timeout=rospy.get_param(
+                private_param(param_prefix, "tof_stale_timeout"),
+                safety.get("tof_stale_timeout", 1.0),
             ),
-            scan_stale_timeout=rospy.get_param("~scan_stale_timeout", safety.get("scan_stale_timeout", 1.0)),
-            caution_speed=rospy.get_param("~caution_speed", safety.get("caution_speed", 0.05)),
+            scan_watchdog_enabled=_as_bool(
+                rospy.get_param(
+                    private_param(param_prefix, "scan_watchdog_enabled"),
+                    safety.get("scan_watchdog_enabled", True),
+                )
+            ),
+            scan_stale_timeout=rospy.get_param(
+                private_param(param_prefix, "scan_stale_timeout"),
+                safety.get("scan_stale_timeout", 1.0),
+            ),
+            caution_speed=rospy.get_param(
+                private_param(param_prefix, "caution_speed"),
+                safety.get("caution_speed", 0.05),
+            ),
             mission_start_min_battery_level=rospy.get_param(
-                "~mission_start_min_battery_level",
+                private_param(param_prefix, "mission_start_min_battery_level"),
                 safety.get("mission_start_min_battery_level", 50.0),
             ),
         )
 
         self.input_topic = rospy.get_param(
-            "~input_topic",
+            private_param(param_prefix, "input_topic"),
             scout_runtime_topic(self.site_config, self.config, "planner_cmd_vel", "/scout/cmd_vel_planner"),
         )
         self.output_topic = rospy.get_param(
-            "~output_topic",
+            private_param(param_prefix, "output_topic"),
             scout_runtime_topic(self.site_config, self.config, "autonomy_cmd_vel", "/scout/cmd_vel_companion"),
         )
         self.tof_topic = rospy.get_param(
-            "~tof_topic",
+            private_param(param_prefix, "tof_topic"),
             scout_runtime_topic(self.site_config, self.config, "tof_range", "/scout/tof"),
         )
         self.scan_topic = rospy.get_param(
-            "~scan_topic",
+            private_param(param_prefix, "scan_topic"),
             scout_runtime_topic(self.site_config, self.config, "lidar_scan", "/scan"),
         )
         self.state_topic = rospy.get_param(
-            "~state_topic",
+            private_param(param_prefix, "state_topic"),
             scout_runtime_topic(self.site_config, self.config, "safety_state", "/scout/safety_state"),
         )
         self.battery_guard_state_topic = rospy.get_param(
-            "~battery_guard_state_topic",
+            private_param(param_prefix, "battery_guard_state_topic"),
             scout_runtime_topic(self.site_config, self.config, "battery_guard_state", "/scout/battery_guard_state"),
         )
-        self.publish_hz = float(rospy.get_param("~publish_hz", safety.get("publish_hz", 10.0)))
-        self.state_publish_period = float(rospy.get_param("~state_publish_period", 1.0))
+        self.publish_hz = float(
+            rospy.get_param(private_param(param_prefix, "publish_hz"), safety.get("publish_hz", 10.0))
+        )
+        self.state_publish_period = float(rospy.get_param(private_param(param_prefix, "state_publish_period"), 1.0))
         self.command_policy = ScoutCommandPublishPolicy(
-            rospy.get_param("~command_stale_timeout", safety.get("command_stale_timeout", 0.5))
+            rospy.get_param(private_param(param_prefix, "command_stale_timeout"), safety.get("command_stale_timeout", 0.5))
         )
 
         self.latest_command = None
@@ -499,7 +533,7 @@ class ScoutSafetyFilterNode(object):
             self.command_pub.publish(output_command)
         self._publish_state(decision, publish_status, now, force=command_event)
 
-    def run(self):
+    def log_active(self):
         self.rospy.loginfo(
             "Scout safety filter active: %s -> %s (tof=%s, scan=%s)",
             self.input_topic,
@@ -507,9 +541,15 @@ class ScoutSafetyFilterNode(object):
             self.tof_topic,
             self.scan_topic,
         )
+
+    def tick(self, event=None):
+        self._publish_decision(command_event=False)
+
+    def run(self):
+        self.log_active()
         rate = self.rospy.Rate(self.publish_hz)
         while not self.rospy.is_shutdown():
-            self._publish_decision(command_event=False)
+            self.tick()
             rate.sleep()
 
 

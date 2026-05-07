@@ -72,6 +72,22 @@ artifacts that include webhook snapshots. The repo ignores
 `config/site_local.yaml`, `config/secrets.yaml`, and `artifacts/`, but ignored
 files are still your responsibility when sharing logs or archives.
 
+When companion notify is enabled, `./auto-scout deploy companion` installs a
+Pi-side resource-alert timer. It runs `./auto-scout notify resource-check` and
+sends Slack only for critical health conditions such as OOM/SIGKILL lines,
+missing Scout swap, required service/timer failures, material interval swap I/O,
+low Scout or Pi memory, low disk, high Auto-Scout process CPU/RSS, or a stopped
+companion container. The swap-I/O check ignores the first `vmstat` row because
+that row is a since-boot average, and it only alerts on interval churn at or
+above 256 KiB/s. Expected no-LD19/no-nav holding-mode skips are not Slack
+alerts. Use `./auto-scout notify resource-check --force-alert` to test the alert
+path.
+
+When the resource-alert command runs locally on the Pi companion, it targets the
+Scout with `roles.scout.ssh.host_key_alias` when that alias is configured. Keep
+the Pi's `~/.ssh/config` and known-host entry valid for `moorebot-scout.local`
+so systemd timer runs can select the same validation key as manual SSH checks.
+
 ## What It Validates
 
 `--mode repo` checks:
@@ -85,6 +101,8 @@ files are still your responsibility when sharing logs or archives.
 - hybrid low-battery return defaults, including the Scout-local guard node, companion map-return controller, and configured dock approach waypoint
 - service/container files for the reset deployment model
 - persistent Scout swap setup through `auto-scout-scout-swap-setup.service` and the path-escaped systemd `.swap` unit
+- Scout resource-metrics setup through `auto-scout-scout-resource-metrics.service` and `auto-scout-scout-resource-metrics.timer`
+- companion resource-alert setup through `auto-scout-companion-resource-alert.service` and `auto-scout-companion-resource-alert.timer` when notify is enabled
 - the companion container contract:
   one host-networked ROS1 companion container with the expected Melodic launch path
 - legacy UI and voice quarantine stubs
@@ -98,7 +116,7 @@ files are still your responsibility when sharing logs or archives.
 - companion storage directories and container stack expectations
 - Scout bridge, motion, camera, scan, ToF, and IMU capability declarations, with scan treated as intentionally disabled when `AUTO_SCOUT_ENABLE_LIDAR=false`
 - Scout LiDAR serial-device presence and whether the configured service user can access it when the LD19 runtime is enabled
-- Scout memory pressure via `free -m`, `/proc/swaps`, and recent OOM/SIGKILL log lines during live Scout validation
+- Scout memory pressure via `free -m`, `/proc/swaps`, `vmstat`, root disk free space, top Auto-Scout process CPU/RSS, and recent OOM/SIGKILL log lines during live Scout validation
 - whether live Scout probing matches the declared vendor topics, normalized sensor topics, battery/dock topics, `/nav_low_bat` service type, ROS networking, and capabilities
 - mission gating for mapping, patrol, and the `smoke_loop` proof run
 - fail-fast blockers like missing pose, missing notify path, or missing vendor bridge declarations
@@ -122,6 +140,10 @@ The most important runtime sanity check after that is live mismatch detection:
 For the validated rooted Scout path, a common serial-access failure mode is a LiDAR device owned by `root:dialout` while the configured service user is not in `dialout`. `./auto-scout validate scout` now reports that explicitly.
 
 While the LD19 is detached, the expected state is `AUTO_SCOUT_ENABLE_LIDAR=false` and `AUTO_SCOUT_ENABLE_NAV_STACK=false`. In that mode, validation should report LiDAR serial access, mapping, patrol, and smoke-loop autonomy as skipped by policy rather than failed, while still checking odom, TF, ToF/IMU, battery guard, motion bridge, vendor JPG, and Scout memory pressure when live probing is enabled.
+
+Scout deploy also installs `auto-scout-scout-resource-metrics.timer`, which writes lightweight snapshots under `/userdata/auto-scout/resource-metrics` every 15 minutes after boot. Use those snapshots for short-term history on the Scout because the base image does not currently provide reliable `sar` history.
+
+Scout deploy defaults to the consolidated `scout_core_runtime.py` process for heartbeat, ToF, IMU, odom/TF, battery guard, safety filter, and motion bridge. The legacy per-node launch path remains available by setting `AUTO_SCOUT_USE_CORE_RUNTIME=false` on the Scout service and restarting it.
 
 ## Probe Workflow
 

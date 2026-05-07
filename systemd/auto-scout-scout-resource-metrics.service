@@ -1,0 +1,15 @@
+# Example unit only. `./auto-scout deploy scout` renders a role-specific
+# service with the configured username and workspace path.
+[Unit]
+Description=Collect Auto-Scout Scout resource metrics
+
+[Service]
+Type=oneshot
+Nice=10
+CPUSchedulingPolicy=batch
+IOSchedulingClass=idle
+User=linaro
+Group=linaro
+WorkingDirectory=/userdata/catkin_ws/src/auto-scout
+Environment=AUTO_SCOUT_RESOURCE_METRICS_DIR=/userdata/auto-scout/resource-metrics
+ExecStart=/bin/bash -lc '/userdata/catkin_ws/src/auto-scout/scripts/collect_scout_resource_metrics.sh'

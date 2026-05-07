@@ -27,8 +27,14 @@ from auto_scout.paths import DEFAULT_SCOUT_CONFIG, repo_root
 from auto_scout.redaction import redact_sensitive
 from auto_scout.site_config import load_site_config, role_config, write_site_config
 from auto_scout.notifications import build_test_notification_payload
+from auto_scout.notifications import build_resource_alert_payload
 from auto_scout.notifications import companion_notification_webhook_url
 from auto_scout.notifications import DEFAULT_TEST_MESSAGE
+from auto_scout.resource_alerts import choose_alert_delivery
+from auto_scout.resource_alerts import collect_resource_health
+from auto_scout.resource_alerts import DEFAULT_ALERT_COOLDOWN_SECONDS
+from auto_scout.resource_alerts import default_alert_state_dir
+from auto_scout.resource_alerts import summarize_resource_health
 
 
 def _validator_command(
@@ -406,6 +412,38 @@ def build_parser():
         default=DEFAULT_TEST_MESSAGE,
         help="Message text for the Slack test notification",
     )
+    notify_resource_parser = notify_subparsers.add_parser(
+        "resource-check",
+        help="Send Slack alerts for critical Scout/Pi resource issues",
+    )
+    notify_resource_parser.add_argument(
+        "--force-alert",
+        action="store_true",
+        help="Send a Slack notification even when no critical resource issue is active",
+    )
+    notify_resource_parser.add_argument(
+        "--state-dir",
+        default=None,
+        help="Directory for resource-alert cooldown state; defaults to companion storage alert-state",
+    )
+    notify_resource_parser.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        default=DEFAULT_ALERT_COOLDOWN_SECONDS,
+        help="Repeat interval for unchanged active alerts",
+    )
+    companion_mode = notify_resource_parser.add_mutually_exclusive_group()
+    companion_mode.add_argument(
+        "--local-companion",
+        action="store_true",
+        help="Collect companion resource data from the current host",
+    )
+    companion_mode.add_argument(
+        "--remote-companion",
+        action="store_true",
+        help="Collect companion resource data over SSH even if this host looks like the companion",
+    )
+    notify_resource_parser.add_argument("--quiet", action="store_true", help="Suppress non-JSON progress output")
 
     return parser
 
@@ -581,6 +619,64 @@ def main(argv=None):
             }
             _emit_json(payload, artifact_run, "notify-test-report.json")
             return 1
+
+        if args.notify_command == "resource-check":
+            if args.local_companion:
+                local_companion = True
+            elif args.remote_companion:
+                local_companion = False
+            else:
+                local_companion = None
+            try:
+                health = collect_resource_health(
+                    site_config,
+                    runner=CommandRunner(artifact_run=artifact_run),
+                    local_companion=local_companion,
+                )
+                report = summarize_resource_health(health)
+                state_dir = args.state_dir
+                if not state_dir:
+                    if health.get("local_companion"):
+                        state_dir = default_alert_state_dir(site_config)
+                    else:
+                        state_dir = str(artifact_run.path / "alert-state")
+                delivery = choose_alert_delivery(
+                    report,
+                    state_dir=state_dir,
+                    force_alert=args.force_alert,
+                    cooldown_seconds=args.cooldown_seconds,
+                )
+                status_code = None
+                if delivery.should_send:
+                    notification_payload = build_resource_alert_payload(report, forced=args.force_alert)
+                    response = _post_json(webhook_url, notification_payload, timeout=15)
+                    status_code = response.status_code
+            except Exception as exc:
+                payload = {
+                    "ok": False,
+                    "phase": "resource_alert",
+                    "error": str(exc),
+                    "site_path": site_path,
+                }
+                _emit_json(payload, artifact_run, "resource-alert-report.json")
+                return 1
+
+            payload = {
+                "ok": True,
+                "phase": "resource_alert",
+                "resource_ok": report.get("ok", False),
+                "status": report.get("status"),
+                "alerts": report.get("alerts", []),
+                "health": report.get("health", {}),
+                "sent": delivery.should_send,
+                "delivery_reason": delivery.reason,
+                "fingerprint": delivery.fingerprint,
+                "state_path": delivery.state_path,
+                "status_code": status_code,
+                "site_path": site_path,
+            }
+            _emit_json(payload, artifact_run, "resource-alert-report.json")
+            return 0
 
         notification_payload = build_test_notification_payload(args.message)
         try:

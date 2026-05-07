@@ -3,17 +3,25 @@
 
 import argparse
 
-from config_utils import load_scout_config
-from scout_runtime_config import load_site_config
 from scout_runtime_config import role_config
 from scout_runtime_config import role_motion_setting
 from scout_runtime_config import scout_runtime_topic
+from scout_node_utils import load_runtime_configs
+from scout_node_utils import private_param
 
 
 class ScoutMotionBridge:
     """Republish standard REP-103 motion commands onto the Scout vendor interface."""
 
-    def __init__(self, config_path=None, site_path=None):
+    def __init__(
+        self,
+        config_path=None,
+        site_path=None,
+        config=None,
+        site_config=None,
+        init_node=True,
+        param_prefix=None,
+    ):
         try:
             import rospy
             from geometry_msgs.msg import Twist
@@ -22,20 +30,30 @@ class ScoutMotionBridge:
 
         self.rospy = rospy
         self.Twist = Twist
-        rospy.init_node("scout_motion_bridge", anonymous=False)
-        self.config, self.config_path = load_scout_config(config_path)
-        self.site_config, self.site_path = load_site_config(site_path)
+        if init_node:
+            rospy.init_node("scout_motion_bridge", anonymous=False)
+        self.config, self.config_path, self.site_config, self.site_path = load_runtime_configs(
+            rospy,
+            config_path=config_path,
+            site_path=site_path,
+            config=config,
+            site_config=site_config,
+            param_prefix=param_prefix,
+        )
         scout = role_config(self.site_config, "scout")
 
         self.input_topic = rospy.get_param(
-            "~input_topic",
+            private_param(param_prefix, "input_topic"),
             scout_runtime_topic(self.site_config, self.config, "autonomy_cmd_vel", "/scout/cmd_vel_companion"),
         )
         self.output_topic = rospy.get_param(
-            "~output_topic",
+            private_param(param_prefix, "output_topic"),
             scout_runtime_topic(self.site_config, self.config, "vendor_cmd_vel", "/cmd_vel_force"),
         )
-        self.forward_axis = rospy.get_param("~forward_axis", role_motion_setting(scout, "forward_axis", "y"))
+        self.forward_axis = rospy.get_param(
+            private_param(param_prefix, "forward_axis"),
+            role_motion_setting(scout, "forward_axis", "y"),
+        )
 
         self.publisher = rospy.Publisher(self.output_topic, Twist, queue_size=1)
         self.subscriber = rospy.Subscriber(self.input_topic, Twist, self.callback, queue_size=1)
@@ -54,13 +72,16 @@ class ScoutMotionBridge:
         vendor.angular.z = msg.angular.z
         self.publisher.publish(vendor)
 
-    def run(self):
+    def log_active(self):
         self.rospy.loginfo(
             "Scout motion bridge active: %s -> %s (forward_axis=%s)",
             self.input_topic,
             self.output_topic,
             self.forward_axis,
         )
+
+    def run(self):
+        self.log_active()
         self.rospy.spin()
 
 
