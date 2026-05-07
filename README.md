@@ -249,6 +249,7 @@ Treat the bring-up sequence as:
 - [docs/setup_guide.md](docs/setup_guide.md): step-by-step setup for Scout plus companion
 - [docs/QUICKSTART.md](docs/QUICKSTART.md): short path to first mapping and patrol tests
 - [docs/AUTO_SCOUT_CHECKLIST.md](docs/AUTO_SCOUT_CHECKLIST.md): current hardware and repo checklist for resuming field work
+- [docs/LOGGING_ALERTING_RUNBOOK.md](docs/LOGGING_ALERTING_RUNBOOK.md): log sources, alert routing, retention limits, and troubleshooting commands
 - [config/scout_config.yaml](config/scout_config.yaml): runtime profile, storage policy, and mission settings
 - [check_scout_compatibility.py](check_scout_compatibility.py): canonical validator for repo assumptions, runtime readiness, and mission prerequisites
 - [config/site.yaml](config/site.yaml): tracked sample inventory for Scout and companion roles
@@ -296,6 +297,7 @@ This listing covers the maintained tracked project tree and also calls out the l
 |-- data/                               # Placeholder for local maps, calibration data, or samples; empty in git.
 |-- docs/                               # Supporting architecture, setup, quick-start, and validation guides.
 |   |-- AUTO_SCOUT_CHECKLIST.md         # Current hardware, deployment, validation, and mapping checklist.
+|   |-- LOGGING_ALERTING_RUNBOOK.md     # Logs, warnings, Slack alerts, and retention reference for troubleshooting.
 |   |-- QUICKSTART.md                   # Short path to probe, deploy, map, and validate the supported stack.
 |   |-- VALIDATION.md                   # Detailed validator modes, checks, and failure interpretation.
 |   |-- VERIFIED_ARCHITECTURE.md        # Verified hardware/software facts and the design conclusions derived from them.

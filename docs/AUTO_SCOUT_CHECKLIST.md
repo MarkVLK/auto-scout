@@ -67,6 +67,7 @@ Reference this when resuming work. Items are ordered by dependency.
   - `battery_map_return_controller.py` runs on the companion and claims map return only when localization, `move_base`, fresh pose, and the dock approach waypoint are healthy
   - Do not subscribe to or echo `/CoreNode/backing_up`
 - [x] Scout system logging repaired and validated
+  - Troubleshooting reference: [LOGGING_ALERTING_RUNBOOK.md](LOGGING_ALERTING_RUNBOOK.md) is the current index of log sources, alert destinations, and retention settings for future LLM sessions
   - 2026-04-27 validation: stale legacy `scout-navigation.service` and `scout-web.service` units were stopped, disabled, and removed from systemd
   - 2026-04-27 validation: `rsyslog` was reinstalled/upgraded to `8.24.0-1+deb9u3`; `/usr/sbin/rsyslogd` exists and `rsyslogd -N1` exits with status 0
   - 2026-04-27 validation: `rsyslog.service`, `syslog.socket`, and `systemd-journald.service` are active; `auto-scout-scout-runtime.service` remains active and enabled

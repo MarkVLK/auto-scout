@@ -2,6 +2,9 @@
 
 `check_scout_compatibility.py` is now the canonical validation entry point for this repo, and `./auto-scout validate ...` is the supported operator-facing wrapper around it.
 
+For troubleshooting live incidents, log locations, alert routing, and retention
+limits, start with [LOGGING_ALERTING_RUNBOOK.md](LOGGING_ALERTING_RUNBOOK.md).
+
 For install-time configuration, the supported companion and Scout entrypoints are now `./auto-scout configure scout` and `./auto-scout configure companion`. Those commands can prompt for usernames, SSH targets, SSH auth mode, workspace directories, and storage roots, or accept them via flags for automation. By default they save to `config/site_local.yaml` while leaving tracked `config/site.yaml` as the sample inventory.
 
 It has three modes:
