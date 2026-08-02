@@ -3,8 +3,42 @@
 Review of the repository after roughly three months idle (last commit 2026-05-07).
 Scope: architecture soundness, documentation accuracy, bugs, and security.
 
-Nothing in this document has been fixed. It is a findings list, ordered by how much
-damage each item does during hardware bring-up.
+Findings are ordered by how much damage each item does during hardware bring-up.
+
+## Fix status
+
+Stage 0 of `docs/BRINGUP_ROADMAP.md` is complete. Test suite: **159 passing.**
+
+| Finding | Status |
+| --- | --- |
+| F1 odom pose/twist frame mismatch | **Open — needs hardware.** Cannot be resolved without the Stage 1b measurement; fixing it blind risks making it worse. |
+| F2 no LiDAR CRC | Fixed. CRC8 (poly 0x4D) validated against the captured bring-up packet; resync now requires the two-byte signature; reject rate is logged. |
+| F3 log cleanup over-counts | Fixed. Only regular file content counts toward the size limit. |
+| F4 unsynchronized threads | Fixed. `RLock` in both nodes, with lock-discipline tests that fail against the pre-fix source. |
+| F5 dock abandoned on recovery | Fixed. Recovery reset is gated out of `map_return` and `vendor_docking`. |
+| F6 unvalidated battery percent | Fixed. Clamped to `[0, 100]`; out-of-range readings are held, surfaced in state, and logged. |
+| F7 ignored GlobalPlanner params | Fixed. `base_global_planner` and `base_local_planner` set explicitly. |
+| F8 catkin deps break Scout builds | Open. Needs a package split. |
+| F9 `angle_max` off by one | Fixed. Derived from the actual beam count. |
+| F10 bytes/str fragility | Fixed. `_byte_at()` normalizes indexing for Python 2 and 3. |
+| F11 tuning placeholders | Open by design — these are measurements, not code changes. Gated on the harness. |
+| F12 no clock sync | Fixed. `runtime.clock_skew` validator check plus chrony setup in the setup guide. |
+| F13 webhook rsynced to Scout | Fixed. `config/site_local.yaml` excluded from deploy sync. |
+| F14 unquoted config in root shell | Open. Hardening, not a live defect. |
+| F15 recursive dock retry | Fixed opportunistically while adding the lock; retries are now iterative. |
+| F16 single-stop redundancy | Open. Deliberate design tradeoff; revisit after manual-drive testing. |
+
+Two corrections to this review, found while fixing:
+
+- The rotor speed field reads **3596 deg/s ≈ 10 Hz** on the captured packet, which
+  independently corroborates the ~10 Hz scan rate recorded in the checklist. The
+  divide-by-100 was wrong as reported, and the corrected value is now asserted in
+  the tests.
+- The multithreaded stress tests written for F4 do **not** reliably detect the race
+  under CPython — the unguarded window is too narrow, and they passed against the
+  pre-fix source. The regression guard is a lock-discipline test instead, which
+  asserts the invariant directly and does fail without the fix. The stress tests
+  are retained as deadlock/torn-state smoke tests only.
 
 ## Summary
 

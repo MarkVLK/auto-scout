@@ -35,6 +35,8 @@ from auto_scout.deploy import _render_scout_service
 from auto_scout.deploy import _render_scout_swap_setup_service
 from auto_scout.deploy import _render_scout_swap_unit
 from auto_scout.deploy import _copy_site_inventory_to_remote
+from auto_scout.deploy import SYNC_EXCLUDES
+from auto_scout.command_runner import CommandRunner
 from auto_scout.mission_config import load_mission_config
 from auto_scout.mission_runner import evaluate_smoke_loop_gate
 from auto_scout.mission_runner import _build_smoke_loop_remote_command
@@ -881,6 +883,49 @@ __OOM__
         companion = runner.payload["roles"]["companion"]
         self.assertFalse(companion["capabilities"]["notify"])
         self.assertEqual(companion["notifications"]["webhook_url"], "")
+
+    def test_readme_directory_listing_is_current(self):
+        """The listing is generated; regenerate it instead of hand-editing."""
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "tools" / "generate_readme_tree.py"), "--check"],
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg="README.md listing is stale; run tools/generate_readme_tree.py\n" + result.stderr,
+        )
+
+    def test_readme_listing_has_no_undescribed_entries(self):
+        """A new file must be described, not silently added with a TODO."""
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("TODO: describe this", readme)
+
+    def test_deploy_rsync_never_ships_the_local_inventory(self):
+        """The unfiltered inventory carries the Slack webhook and must not sync.
+
+        Each role receives its own filtered copy after the rsync. Without this
+        exclusion the operator's unfiltered file lands on the Scout first and is
+        only overwritten afterwards.
+        """
+        self.assertIn("config/site_local.yaml", SYNC_EXCLUDES)
+
+        runner = CommandRunner(dry_run=True)
+        command = runner.build_rsync_command(
+            {"user": "linaro", "host": "192.0.2.10", "port": 22, "auth": {"mode": "agent"}},
+            "/repo/",
+            "/userdata/catkin_ws/src/auto-scout",
+            excludes=SYNC_EXCLUDES,
+        )
+
+        self.assertIn("config/site_local.yaml", command)
+        self.assertEqual(
+            command[command.index("config/site_local.yaml") - 1],
+            "--exclude",
+        )
 
     def test_companion_deploy_site_inventory_keeps_companion_webhook_secret(self):
         class FakeRunner:

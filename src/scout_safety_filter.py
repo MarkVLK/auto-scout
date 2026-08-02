@@ -6,6 +6,7 @@ from __future__ import print_function
 import argparse
 import json
 import math
+import threading
 
 from scout_runtime_config import scout_runtime_topic
 from scout_node_utils import load_runtime_configs
@@ -421,6 +422,15 @@ class ScoutSafetyFilterNode(object):
             rospy.get_param(private_param(param_prefix, "command_stale_timeout"), safety.get("command_stale_timeout", 0.5))
         )
 
+        # rospy gives every subscriber its own thread and the publish timer
+        # another. command_callback and tick both drive _publish_decision, which
+        # mutates the episode state in ScoutCommandPublishPolicy. Interleaved,
+        # the timer can consume the one-stop-per-episode budget so a real stop
+        # is suppressed - the unsafe direction for a safety filter.
+        # Re-entrant so command_callback can hold it across note_command and
+        # the _publish_decision it triggers, keeping that pair atomic.
+        self.state_lock = threading.RLock()
+
         self.latest_command = None
         self.tof_seen = False
         self.last_tof_range = None
@@ -455,25 +465,32 @@ class ScoutSafetyFilterNode(object):
 
     def command_callback(self, msg):
         now = self._now()
-        self.latest_command = msg
-        self.command_policy.note_command(now.to_sec())
-        self._publish_decision(command_event=True, now=now)
+        with self.state_lock:
+            self.latest_command = msg
+            self.command_policy.note_command(now.to_sec())
+            self._publish_decision(command_event=True, now=now)
 
     def tof_callback(self, msg):
-        self.tof_seen = True
-        self.last_tof_range = msg.range
-        self.last_tof_time = self._now()
+        now = self._now()
+        with self.state_lock:
+            self.tof_seen = True
+            self.last_tof_range = msg.range
+            self.last_tof_time = now
 
     def scan_callback(self, msg):
-        self.scan_seen = True
-        self.last_scan_time = self._now()
+        now = self._now()
+        with self.state_lock:
+            self.scan_seen = True
+            self.last_scan_time = now
 
     def battery_guard_callback(self, msg):
         try:
             payload = json.loads(getattr(msg, "data", "") or "{}")
         except (TypeError, ValueError):
             payload = {}
-        if isinstance(payload, dict):
+        if not isinstance(payload, dict):
+            return
+        with self.state_lock:
             self.battery_guard_mode = str(payload.get("mode") or "idle")
             self.battery_percent = _finite_number(payload.get("battery_percent"))
             self.charging = _as_bool(payload.get("charging"), default=(self.battery_guard_mode == "charging"))
@@ -513,25 +530,26 @@ class ScoutSafetyFilterNode(object):
     def _publish_decision(self, command_event=False, now=None):
         if now is None:
             now = self._now()
-        command = self.latest_command or self.Twist()
-        decision = self.logic.decide(
-            command,
-            tof_seen=self.tof_seen,
-            tof_range=self.last_tof_range,
-            tof_age=self._age(self.last_tof_time, now),
-            scan_seen=self.scan_seen,
-            scan_age=self._age(self.last_scan_time, now),
-            battery_guard_mode=self.battery_guard_mode,
-            battery_percent=self.battery_percent,
-            charging=self.charging,
-        )
-        publish_status = self.command_policy.decide_publish(decision, now.to_sec(), command_event=command_event)
-        if publish_status["publish"]:
-            output_command = decision["command"]
-            if publish_status["publish_stop"]:
-                output_command = self.logic.zero_twist(command)
-            self.command_pub.publish(output_command)
-        self._publish_state(decision, publish_status, now, force=command_event)
+        with self.state_lock:
+            command = self.latest_command or self.Twist()
+            decision = self.logic.decide(
+                command,
+                tof_seen=self.tof_seen,
+                tof_range=self.last_tof_range,
+                tof_age=self._age(self.last_tof_time, now),
+                scan_seen=self.scan_seen,
+                scan_age=self._age(self.last_scan_time, now),
+                battery_guard_mode=self.battery_guard_mode,
+                battery_percent=self.battery_percent,
+                charging=self.charging,
+            )
+            publish_status = self.command_policy.decide_publish(decision, now.to_sec(), command_event=command_event)
+            if publish_status["publish"]:
+                output_command = decision["command"]
+                if publish_status["publish_stop"]:
+                    output_command = self.logic.zero_twist(command)
+                self.command_pub.publish(output_command)
+            self._publish_state(decision, publish_status, now, force=command_event)
 
     def log_active(self):
         self.rospy.loginfo(

@@ -33,6 +33,31 @@ def touch_tree(path, age_days):
 
 
 class RosLogCleanupTest(unittest.TestCase):
+    def test_entry_size_counts_only_file_content(self):
+        """Directory inodes are not log payload and must not inflate usage."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "ros-logs"
+            for name in ["run-001", "run-002", "run-003"]:
+                write_file(root / name / "node.log", size=2048)
+
+            self.assertEqual(cleanup_ros_logs._entry_size(str(root)), 3 * 2048)
+            self.assertEqual(cleanup_ros_logs._entry_size(str(root / "run-001")), 2048)
+
+    def test_size_prune_keeps_newest_within_limit(self):
+        """The prune must stop as soon as real usage is under the limit."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "ros-logs"
+            for index, name in enumerate(["run-001", "run-002", "run-003"], start=1):
+                write_file(root / name / "node.log", size=2048)
+                touch_tree(root / name, age_days=4 - index)
+
+            cleanup_ros_logs.cleanup_path(str(root), max_age_days=7, max_bytes=4096)
+
+            self.assertFalse((root / "run-001").exists())
+            self.assertTrue((root / "run-002").exists())
+            self.assertTrue((root / "run-003").exists())
+            self.assertLessEqual(cleanup_ros_logs._entry_size(str(root)), 4096)
+
     def test_preserves_logs_within_age_and_size_limits(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "ros-logs"

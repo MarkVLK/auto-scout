@@ -111,6 +111,73 @@ class ScoutBatteryDockGuardLogicTest(unittest.TestCase):
         self.assertEqual(logic.mode, MODE_FAILED)
         self.assertEqual(logic.attempt, 2)
 
+    def test_battery_recovery_does_not_abandon_vendor_docking(self):
+        """Percent recovers as load drops near the dock; the dock must continue."""
+        logic = self.make_logic()
+        logic.handle_battery(20.0, False, 100.0)
+        logic.tick(105.0)
+        self.assertEqual(logic.mode, MODE_VENDOR_DOCKING)
+
+        actions = logic.handle_battery(28.0, False, 106.0)
+
+        self.assertEqual(actions, [])
+        self.assertEqual(logic.mode, MODE_VENDOR_DOCKING)
+        self.assertIsNotNone(logic.vendor_deadline)
+
+    def test_battery_recovery_does_not_abandon_map_return(self):
+        logic = self.make_logic()
+        logic.handle_battery(20.0, False, 100.0)
+        logic.handle_control({"action": "claim_map_return"}, 101.0)
+        self.assertEqual(logic.mode, MODE_MAP_RETURN)
+
+        logic.handle_battery(30.0, False, 102.0)
+
+        self.assertEqual(logic.mode, MODE_MAP_RETURN)
+        self.assertIsNotNone(logic.map_return_deadline)
+
+    def test_battery_recovery_still_resets_from_return_required(self):
+        """A recovery before any return has started is a legitimate reset."""
+        logic = self.make_logic()
+        logic.handle_battery(20.0, False, 100.0)
+        self.assertEqual(logic.mode, MODE_RETURN_REQUIRED)
+
+        logic.handle_battery(30.0, False, 101.0)
+
+        self.assertEqual(logic.mode, MODE_IDLE)
+        self.assertIsNone(logic.claim_deadline)
+
+    def test_implausible_battery_readings_are_ignored(self):
+        """Out-of-range values mean the vendor array layout changed, not a flat battery."""
+        logic = self.make_logic()
+        logic.handle_battery(60.0, False, 100.0)
+
+        for bad_value in [-1.0, 101.0, 65535.0, float("nan"), float("inf"), "n/a", None]:
+            actions = logic.handle_battery(bad_value, False, 101.0)
+
+            self.assertEqual(actions, [], bad_value)
+            self.assertEqual(logic.mode, MODE_IDLE, bad_value)
+            self.assertEqual(logic.battery_percent, 60.0, bad_value)
+
+    def test_implausible_battery_reading_is_surfaced_in_state(self):
+        logic = self.make_logic()
+        logic.handle_battery(60.0, False, 100.0)
+
+        logic.handle_battery(65535.0, False, 101.0)
+        self.assertEqual(logic.state_payload()["rejected_battery_reading"], 65535.0)
+
+        logic.handle_battery(55.0, False, 102.0)
+        self.assertIsNone(logic.state_payload()["rejected_battery_reading"])
+
+    def test_boundary_battery_percentages_are_accepted(self):
+        logic = self.make_logic()
+
+        logic.handle_battery(100.0, False, 100.0)
+        self.assertEqual(logic.battery_percent, 100.0)
+
+        logic.handle_battery(0.0, False, 101.0)
+        self.assertEqual(logic.battery_percent, 0.0)
+        self.assertEqual(logic.mode, MODE_VENDOR_DOCKING)
+
     def test_vendor_timeout_retries_once_then_fails(self):
         logic = self.make_logic(dock_retry_count=1, dock_timeout_seconds=2.0)
         logic.handle_battery(20.0, False, 100.0)

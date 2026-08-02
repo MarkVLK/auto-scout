@@ -74,6 +74,14 @@
     <rosparam file="$(find auto-scout)/config/base_local_planner_params.yaml" command="load"/>
     <rosparam file="$(find auto-scout)/config/global_planner_params.yaml" command="load"/>
 
+    <!--
+      move_base defaults to navfn/NavfnROS, which would silently ignore
+      config/global_planner_params.yaml. Select GlobalPlanner explicitly so
+      that tuning actually applies.
+    -->
+    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+    <param name="base_local_planner" value="base_local_planner/TrajectoryPlannerROS"/>
+
     <param name="recovery_behavior_enabled" value="true"/>
     <param name="clearing_rotation_allowed" value="true"/>
   </node>

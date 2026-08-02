@@ -12,6 +12,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from ld19_protocol import LD19ScanAssembler
+from ld19_protocol import is_valid_ld19_packet
+from ld19_protocol import ld19_checksum
 from ld19_protocol import parse_ld19_packet
 
 
@@ -32,7 +34,8 @@ def build_packet(start_angle_hundredths, end_angle_hundredths, distance_millimet
     for _ in range(12):
         payload.extend((distance_millimeters & 0xFF, (distance_millimeters >> 8) & 0xFF, 0x20))
     payload.extend((end_angle_hundredths & 0xFF, (end_angle_hundredths >> 8) & 0xFF))
-    payload.extend((0x00, 0x00, 0x00))
+    payload.extend((0x00, 0x00))
+    payload.append(ld19_checksum(payload))
     return bytes(payload)
 
 
@@ -48,6 +51,53 @@ class LD19ProtocolTest(unittest.TestCase):
         self.assertEqual(len(parsed["points"]), 12)
         self.assertAlmostEqual(parsed["points"][0]["distance_meters"], 0.151, places=3)
         self.assertAlmostEqual(parsed["points"][-1]["angle_degrees"], 26.21, places=2)
+
+    def test_transcript_packet_checksum_matches_captured_trailer(self):
+        """The captured bring-up packet pins the CRC polynomial."""
+        self.assertEqual(ld19_checksum(TRANSCRIPT_PACKET), TRANSCRIPT_PACKET[46])
+        self.assertTrue(is_valid_ld19_packet(TRANSCRIPT_PACKET))
+
+    def test_rejects_packet_with_corrupted_payload(self):
+        """A flipped payload byte must not reach the caller as range data."""
+        for corrupt_index in [6, 20, 41, 44]:
+            corrupted = bytearray(TRANSCRIPT_PACKET)
+            corrupted[corrupt_index] ^= 0xFF
+
+            self.assertFalse(is_valid_ld19_packet(bytes(corrupted)), corrupt_index)
+            self.assertIsNone(parse_ld19_packet(bytes(corrupted)), corrupt_index)
+
+    def test_rejects_packet_with_corrupted_checksum(self):
+        corrupted = bytearray(TRANSCRIPT_PACKET)
+        corrupted[46] ^= 0x01
+
+        self.assertIsNone(parse_ld19_packet(bytes(corrupted)))
+
+    def test_rejects_false_header_lock_on_payload_bytes(self):
+        """0x54 inside payload must not be accepted as a packet start."""
+        false_lock = bytearray([0x54, 0x2C]) + bytearray(TRANSCRIPT_PACKET[:45])
+
+        self.assertIsNone(parse_ld19_packet(bytes(false_lock)))
+
+    def test_checksum_verification_can_be_bypassed_for_diagnostics(self):
+        corrupted = bytearray(TRANSCRIPT_PACKET)
+        corrupted[46] ^= 0x01
+
+        self.assertIsNotNone(parse_ld19_packet(bytes(corrupted), verify_checksum=False))
+
+    def test_parses_bytearray_and_bytes_identically(self):
+        """The driver feeds a bytearray; Python 2 indexes bytes differently."""
+        from_bytes = parse_ld19_packet(TRANSCRIPT_PACKET)
+        from_bytearray = parse_ld19_packet(bytearray(TRANSCRIPT_PACKET))
+
+        self.assertIsNotNone(from_bytearray)
+        self.assertEqual(from_bytes["points"], from_bytearray["points"])
+
+    def test_reports_rotor_speed_in_degrees_per_second(self):
+        """The LD19 speed field is degrees per second, not hundredths."""
+        parsed = parse_ld19_packet(TRANSCRIPT_PACKET)
+
+        # ~3596 deg/s is roughly 10 Hz, matching the observed scan rate.
+        self.assertAlmostEqual(parsed["speed_degrees_per_second"], 3596.0, places=0)
 
     def test_scan_assembler_publishes_completed_scan_on_wrap(self):
         assembler = LD19ScanAssembler(

@@ -22,6 +22,10 @@ SYNC_EXCLUDES = [
     "*.pyc",
     ".pytest_cache",
     "artifacts/runs",
+    # The local inventory carries the companion Slack webhook. Each role gets
+    # its own filtered copy written by _copy_site_inventory_to_remote after the
+    # sync, so the operator's unfiltered file must never be rsynced at all.
+    "config/site_local.yaml",
 ]
 
 ROS_LOG_MAX_AGE_DAYS = 7

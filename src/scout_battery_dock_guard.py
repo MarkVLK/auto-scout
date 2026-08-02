@@ -6,6 +6,7 @@ from __future__ import print_function
 import argparse
 import json
 import math
+import threading
 
 from scout_runtime_config import scout_runtime_topic
 from scout_node_utils import load_runtime_configs
@@ -53,6 +54,23 @@ def _finite_number(value):
     return numeric
 
 
+def _battery_percent(value):
+    """Return a plausible battery percent, or ``None`` if the reading is junk.
+
+    The vendor ``roller_eye/status`` array layout is inferred from rooted
+    inspection, not from a documented contract. If a firmware update reorders
+    it we would silently read some other field: a low value docks the robot
+    mid-mission, a high value means it never returns and runs flat. Refusing to
+    act on out-of-range values is the safe response to both.
+    """
+    numeric = _finite_number(value)
+    if numeric is None:
+        return None
+    if numeric < 0.0 or numeric > 100.0:
+        return None
+    return numeric
+
+
 def _json_payload(text):
     try:
         payload = json.loads(text or "{}")
@@ -85,6 +103,7 @@ class ScoutBatteryDockGuardLogic(object):
         self.mode = MODE_IDLE
         self.reason = "battery_above_threshold"
         self.battery_percent = None
+        self.rejected_battery_reading = None
         self.charging = False
         self.attempt = 0
         self.last_vendor_status = None
@@ -101,6 +120,7 @@ class ScoutBatteryDockGuardLogic(object):
             "reason": self.reason,
             "attempt": self.attempt,
             "last_vendor_status": self.last_vendor_status,
+            "rejected_battery_reading": self.rejected_battery_reading,
         }
 
     def _set_mode(self, mode, reason):
@@ -109,6 +129,14 @@ class ScoutBatteryDockGuardLogic(object):
 
     def _reset_to_idle_if_recovered(self):
         if self.battery_percent is None:
+            return
+        # Never abandon a return that is already under way. Battery percent
+        # derived from voltage routinely recovers several points the moment
+        # load drops, which is exactly what happens as the robot slows to dock.
+        # Resetting here would stop tracking a dock that is still physically in
+        # progress and let the safety filter unblock planner commands, putting
+        # two controllers on one robot.
+        if self.mode in [MODE_MAP_RETURN, MODE_VENDOR_DOCKING]:
             return
         if self.battery_percent >= self.min_battery_level + self.battery_reset_margin:
             self._set_mode(MODE_IDLE, "battery_recovered")
@@ -146,9 +174,13 @@ class ScoutBatteryDockGuardLogic(object):
         return []
 
     def handle_battery(self, battery_percent, charging, now):
-        numeric = _finite_number(battery_percent)
+        numeric = _battery_percent(battery_percent)
         if numeric is not None:
             self.battery_percent = numeric
+            self.rejected_battery_reading = None
+        elif battery_percent is not None:
+            # Hold the last plausible value rather than acting on a bad one.
+            self.rejected_battery_reading = battery_percent
         self.charging = bool(charging)
 
         if self.charging:
@@ -260,6 +292,12 @@ class ScoutBatteryDockGuardNode(object):
         self.BatteryStatus = BatteryStatus
         self.nav_low_bat = nav_low_bat
 
+        # Four subscribers plus the tick timer all mutate self.logic from
+        # separate rospy threads. Unsynchronized, concurrent entry into
+        # _start_vendor_docking can double-call /nav_low_bat or skip a retry.
+        # Re-entrant because the vendor-call failure path re-enters _run_actions.
+        self.state_lock = threading.RLock()
+
         if init_node:
             rospy.init_node("scout_battery_dock_guard", anonymous=False)
         self.config, self.config_path, self.site_config, self.site_path = load_runtime_configs(
@@ -363,24 +401,28 @@ class ScoutBatteryDockGuardNode(object):
         self.state_pub.publish(json.dumps(payload, sort_keys=True))
 
     def _run_actions(self, actions):
-        for action in actions:
+        # Drained iteratively rather than recursively: each failed vendor call
+        # blocks up to 2s in wait_for_service, and recursion made that stack
+        # depth scale with dock_retry_count inside a subscriber callback.
+        pending = list(actions)
+        while pending:
+            action = pending.pop(0)
             if action == ACTION_CALL_VENDOR_DOCK:
-                self._call_vendor_dock()
+                pending.extend(self._call_vendor_dock())
         self._publish_state()
 
     def _call_vendor_dock(self):
+        """Call the vendor dock service, returning any follow-up actions."""
         if self.dry_run:
             self.rospy.logwarn("Battery guard dry-run: skipping %s", self.vendor_dock_service)
-            return
+            return []
         try:
             self.rospy.wait_for_service(self.vendor_dock_service, timeout=2.0)
             self.vendor_dock_proxy()
         except Exception as exc:
             self.rospy.logerr("Vendor dock request failed: %s", exc)
-            actions = self.logic.handle_vendor_call_failed(self._now_seconds())
-            for action in actions:
-                if action == ACTION_CALL_VENDOR_DOCK:
-                    self._call_vendor_dock()
+            return self.logic.handle_vendor_call_failed(self._now_seconds())
+        return []
 
     def battery_callback(self, msg):
         if not self.enabled:
@@ -388,17 +430,28 @@ class ScoutBatteryDockGuardNode(object):
         values = list(getattr(msg, "status", []) or [])
         battery_percent = values[1] if len(values) > 1 else None
         charging = bool(values[2]) if len(values) > 2 else False
-        self._run_actions(self.logic.handle_battery(battery_percent, charging, self._now_seconds()))
+        with self.state_lock:
+            self._run_actions(self.logic.handle_battery(battery_percent, charging, self._now_seconds()))
+            rejected = self.logic.rejected_battery_reading
+        if rejected is not None:
+            self.rospy.logwarn_throttle(
+                60.0,
+                "Ignoring implausible battery reading %s from %s; vendor status array may have changed layout",
+                rejected,
+                self.battery_topic,
+            )
 
     def vendor_status_callback(self, msg):
         if not self.enabled:
             return
-        self._run_actions(self.logic.handle_vendor_status(getattr(msg, "data", None), self._now_seconds()))
+        with self.state_lock:
+            self._run_actions(self.logic.handle_vendor_status(getattr(msg, "data", None), self._now_seconds()))
 
     def control_callback(self, msg):
         if not self.enabled:
             return
-        self._run_actions(self.logic.handle_control(_json_payload(getattr(msg, "data", "")), self._now_seconds()))
+        with self.state_lock:
+            self._run_actions(self.logic.handle_control(_json_payload(getattr(msg, "data", "")), self._now_seconds()))
 
     def runtime_request_callback(self, msg):
         if not self.enabled:
@@ -406,7 +459,8 @@ class ScoutBatteryDockGuardNode(object):
         if str(getattr(msg, "data", "")).strip().lower() != "dock":
             return
         payload = {"action": "start_vendor_dock", "reason": "runtime_request"}
-        self._run_actions(self.logic.handle_control(payload, self._now_seconds()))
+        with self.state_lock:
+            self._run_actions(self.logic.handle_control(payload, self._now_seconds()))
 
     def log_active(self):
         self.rospy.loginfo(
@@ -418,7 +472,9 @@ class ScoutBatteryDockGuardNode(object):
         )
 
     def tick(self, event=None):
-        if self.enabled:
+        if not self.enabled:
+            return
+        with self.state_lock:
             self._run_actions(self.logic.tick(self._now_seconds()))
 
     def run(self):

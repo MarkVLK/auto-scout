@@ -13,7 +13,13 @@ DEFAULT_MAX_BYTES = 100 * 1024 * 1024
 
 
 def _entry_size(path):
-    """Return apparent disk usage for a file tree without following symlinks."""
+    """Return the size of the file content under ``path`` without following symlinks.
+
+    Only regular files count toward the total. Directory inodes report their own
+    st_size (typically 4096 bytes) which is not log payload, so including them
+    over-counts usage by several times on a tree of many small run directories
+    and makes the size-based prune delete far more than the configured limit.
+    """
     try:
         stat_result = os.lstat(path)
     except OSError:
@@ -22,20 +28,20 @@ def _entry_size(path):
     if not os.path.isdir(path) or os.path.islink(path):
         return stat_result.st_size
 
-    total = stat_result.st_size
+    total = 0
     for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
         for name in list(dirs):
             child = os.path.join(root, name)
             try:
-                child_stat = os.lstat(child)
+                if os.path.islink(child):
+                    dirs.remove(name)
             except OSError:
                 dirs.remove(name)
-                continue
-            total += child_stat.st_size
-            if os.path.islink(child):
-                dirs.remove(name)
         for name in files:
-            total += _entry_size(os.path.join(root, name))
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
     return total
 
 
@@ -122,7 +128,9 @@ def cleanup_path(root, max_age_days, max_bytes, dry_run=False):
         _remove_path(path, dry_run, actions)
         total -= size
 
-    actions.append("usage {} {}".format(root, min(total, max_bytes) if dry_run else _entry_size(root)))
+    # In dry-run nothing was deleted, so report the projected post-cleanup
+    # total rather than re-measuring the untouched tree.
+    actions.append("usage {} {}".format(root, total if dry_run else _entry_size(root)))
     return actions
 
 

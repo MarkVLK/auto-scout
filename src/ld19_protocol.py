@@ -10,6 +10,57 @@ LD19_VER_LEN = 0x2C
 LD19_PACKET_LENGTH = 47
 LD19_POINTS_PER_PACKET = 12
 
+# The LD19 trailer byte is a CRC8 over the preceding 46 bytes:
+# polynomial 0x4D, initial value 0x00, non-reflected, no final XOR.
+# Verified against the captured bring-up packet in tests/test_ld19_protocol.py.
+LD19_CRC_POLYNOMIAL = 0x4D
+
+
+def _build_crc_table(polynomial):
+    table = []
+    for index in range(256):
+        value = index
+        for _ in range(8):
+            if value & 0x80:
+                value = ((value << 1) ^ polynomial) & 0xFF
+            else:
+                value = (value << 1) & 0xFF
+        table.append(value)
+    return table
+
+
+LD19_CRC_TABLE = _build_crc_table(LD19_CRC_POLYNOMIAL)
+
+
+def _byte_at(data, index):
+    """Return ``data[index]`` as an int under both Python 2 and Python 3.
+
+    Indexing ``bytes`` yields a one-character str on Python 2, which the Scout
+    still runs. Normalizing here keeps the parser correct whether the caller
+    passes ``bytes`` or ``bytearray``.
+    """
+    value = data[index]
+    if isinstance(value, int):
+        return value
+    return ord(value)
+
+
+def ld19_checksum(data, length=LD19_PACKET_LENGTH - 1):
+    """Return the LD19 CRC8 over the first ``length`` bytes of ``data``."""
+    crc = 0
+    for index in range(length):
+        crc = LD19_CRC_TABLE[(crc ^ _byte_at(data, index)) & 0xFF]
+    return crc
+
+
+def is_valid_ld19_packet(packet):
+    """Return whether ``packet`` has a valid header, version byte, and CRC."""
+    if len(packet) < LD19_PACKET_LENGTH:
+        return False
+    if _byte_at(packet, 0) != LD19_HEADER or _byte_at(packet, 1) != LD19_VER_LEN:
+        return False
+    return ld19_checksum(packet) == _byte_at(packet, LD19_PACKET_LENGTH - 1)
+
 
 def normalize_angle_degrees(angle_degrees):
     """Normalize an angle into ``[0, 360)`` degrees."""
@@ -28,22 +79,34 @@ def interpolate_angle_degrees(start_angle, end_angle, point_index, point_count=L
     return normalize_angle_degrees(start_angle + (step * point_index))
 
 
-def parse_ld19_packet(packet):
-    """Parse one LD19 packet and return the decoded points or ``None``."""
-    if len(packet) < LD19_PACKET_LENGTH:
-        return None
-    if packet[0] != LD19_HEADER or packet[1] != LD19_VER_LEN:
-        return None
+def parse_ld19_packet(packet, verify_checksum=True):
+    """Parse one LD19 packet and return the decoded points or ``None``.
 
-    speed_degrees_per_second = struct.unpack("<H", packet[2:4])[0] / 100.0
-    start_angle_degrees = struct.unpack("<H", packet[4:6])[0] / 100.0
-    end_angle_degrees = struct.unpack("<H", packet[42:44])[0] / 100.0
-    timestamp = struct.unpack("<H", packet[44:46])[0]
+    A failed CRC returns ``None``. Corrupted range data must never reach the
+    costmap or the safety filter, and the driver's byte-wise resync makes a
+    false header lock likely enough that the CRC is the only real defence.
+    """
+    if verify_checksum:
+        if not is_valid_ld19_packet(packet):
+            return None
+    else:
+        if len(packet) < LD19_PACKET_LENGTH:
+            return None
+        if _byte_at(packet, 0) != LD19_HEADER or _byte_at(packet, 1) != LD19_VER_LEN:
+            return None
+
+    raw = bytes(bytearray(packet[:LD19_PACKET_LENGTH]))
+
+    # The LD19 reports rotor speed directly in degrees per second.
+    speed_degrees_per_second = float(struct.unpack("<H", raw[2:4])[0])
+    start_angle_degrees = struct.unpack("<H", raw[4:6])[0] / 100.0
+    end_angle_degrees = struct.unpack("<H", raw[42:44])[0] / 100.0
+    timestamp = struct.unpack("<H", raw[44:46])[0]
 
     points = []
     for index in range(LD19_POINTS_PER_PACKET):
         offset = 6 + (index * 3)
-        distance_millimeters = struct.unpack("<H", packet[offset : offset + 2])[0]
+        distance_millimeters = struct.unpack("<H", raw[offset : offset + 2])[0]
         angle_degrees = interpolate_angle_degrees(
             start_angle_degrees,
             end_angle_degrees,
@@ -55,7 +118,7 @@ def parse_ld19_packet(packet):
                 "angle_degrees": angle_degrees,
                 "angle_radians": math.radians(angle_degrees),
                 "distance_meters": distance_millimeters / 1000.0,
-                "intensity": float(packet[offset + 2]),
+                "intensity": float(_byte_at(raw, offset + 2)),
             }
         )
 

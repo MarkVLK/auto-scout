@@ -202,6 +202,12 @@ known-host entry, or validation key selection for `moorebot-scout.local`.
 
 ## Retention Configuration Reference
 
+Size-based ROS log retention counts regular file content only. Directory inodes
+report their own `st_size` (typically 4096 bytes each) which is not log payload;
+counting them previously over-reported usage by several times on a tree of many
+small run directories and pruned far more aggressively than the configured limit
+implies. See `docs/CODE_REVIEW_2026-08.md` finding F3.
+
 | Setting | Default | Where configured |
 | --- | --- | --- |
 | Scout persistent journal size | `SystemMaxUse=32M` | Live `/etc/systemd/journald.conf`; tracked in checklist |
@@ -210,7 +216,7 @@ known-host entry, or validation key selection for `moorebot-scout.local`.
 | journald to syslog forwarding | `ForwardToSyslog=yes` | Live `/etc/systemd/journald.conf`; tracked in checklist |
 | vendor file truncation | files over 100 KiB in `/var/log` and `/tmp/latest` | Live `/usr/local/bin/cleanLog.sh` |
 | Auto-Scout ROS log max age | 7 days | `ROS_LOG_MAX_AGE_DAYS` in [src/auto_scout/deploy.py](../src/auto_scout/deploy.py); rendered to systemd env |
-| Auto-Scout ROS log max bytes | 100 MiB per configured directory | `ROS_LOG_MAX_BYTES` in [src/auto_scout/deploy.py](../src/auto_scout/deploy.py); [scripts/cleanup_ros_logs.py](../scripts/cleanup_ros_logs.py) |
+| Auto-Scout ROS log max bytes | 100 MiB of file content per configured directory | `ROS_LOG_MAX_BYTES` in [src/auto_scout/deploy.py](../src/auto_scout/deploy.py); [scripts/cleanup_ros_logs.py](../scripts/cleanup_ros_logs.py) |
 | ROS cleanup timer cadence | 5 minutes after boot, then every 1 day | [src/auto_scout/deploy.py](../src/auto_scout/deploy.py), [systemd/auto-scout-ros-log-cleanup.timer](../systemd/auto-scout-ros-log-cleanup.timer) |
 | Scout resource snapshot cadence | 10 minutes after boot, then every 15 minutes | [systemd/auto-scout-scout-resource-metrics.timer](../systemd/auto-scout-scout-resource-metrics.timer) |
 | Scout resource snapshot max age | 14 days | `AUTO_SCOUT_RESOURCE_METRICS_MAX_AGE_DAYS` in [scripts/collect_scout_resource_metrics.sh](../scripts/collect_scout_resource_metrics.sh) |

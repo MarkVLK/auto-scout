@@ -12,6 +12,7 @@ import shlex
 import shutil
 import socket
 import sys
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1946,6 +1947,137 @@ def _auto_scout_process_warnings(ps_output):
     return warnings
 
 
+# ROS 1 TF fails once stamps drift past the costmap transform_tolerance, which
+# config/local_costmap_params.yaml and config/global_costmap_params.yaml both set
+# to 0.5s. Warn well before that, fail once TF is certain to break.
+CLOCK_SKEW_WARN_SECONDS = 0.25
+CLOCK_SKEW_FAIL_SECONDS = 1.0
+
+
+def _parse_clock_probe(output):
+    """Return (epoch_seconds, time_sync_text) from a clock probe payload."""
+    sections = _split_probe_sections(output or "")
+    epoch = None
+    for line in sections.get("EPOCH", "").splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            epoch = float(candidate)
+        except ValueError:
+            continue
+        break
+    return epoch, sections.get("SYNC", "").strip()
+
+
+def _measure_remote_clock(executor):
+    """Return (epoch, sync_text, round_trip_seconds) for a probe target.
+
+    The round trip bounds how precisely the remote clock can be compared to the
+    local one, so it is reported alongside the skew rather than ignored.
+    """
+    command = "echo __EPOCH__; date +%s.%N; echo __SYNC__; (timedatectl show -p NTPSynchronized -p NTP 2>/dev/null || chronyc tracking 2>/dev/null || ntpq -p 2>/dev/null || echo 'no time sync tooling found')"
+    started = time.time()
+    result = executor.run(command, check=False)
+    round_trip = time.time() - started
+    if not result.ok:
+        return None, "", round_trip
+
+    epoch, sync_text = _parse_clock_probe(result.stdout or "")
+    # Compare the remote reading against the midpoint of the local interval so
+    # the transport latency cancels instead of biasing the result.
+    return epoch, sync_text, round_trip
+
+
+def _add_clock_skew_check(report, site_config, effective_role, live_probe_enabled):
+    """Compare Scout and companion clocks, which must agree for TF to work."""
+    if not live_probe_enabled:
+        report.add(
+            "runtime.clock_skew",
+            "skip",
+            "Clock skew probing is disabled",
+        )
+        return
+    if effective_role not in ["scout", "system"]:
+        report.add(
+            "runtime.clock_skew",
+            "skip",
+            "Clock skew is only meaningful when the Scout is in scope",
+        )
+        return
+
+    scout = role_config(site_config, "scout")
+    scout_executor = ProbeExecutor(scout, force_remote=not _role_matches_local_host(scout))
+
+    started = time.time()
+    scout_epoch, scout_sync, round_trip = _measure_remote_clock(scout_executor)
+    local_midpoint = started + (round_trip / 2.0)
+
+    if scout_epoch is None:
+        report.add(
+            "runtime.clock_skew",
+            "warn",
+            "Could not read the Scout clock",
+            details=["ROS 1 TF between the Scout and the companion requires synchronized clocks."],
+        )
+        return
+
+    skew = scout_epoch - local_midpoint
+    precision = round_trip / 2.0
+    evidence = {
+        "scout_epoch": scout_epoch,
+        "reference_epoch": local_midpoint,
+        "skew_seconds": round(skew, 3),
+        "measurement_precision_seconds": round(precision, 3),
+        "warn_threshold_seconds": CLOCK_SKEW_WARN_SECONDS,
+        "fail_threshold_seconds": CLOCK_SKEW_FAIL_SECONDS,
+        "scout_time_sync": scout_sync,
+    }
+    details = [
+        "Scout clock differs from this host by {:+.3f}s (measurement precision +/-{:.3f}s).".format(skew, precision),
+        "Costmap transform_tolerance is 0.5s; drift beyond that breaks TF and move_base stops planning.",
+    ]
+    if scout_sync:
+        details.append("Scout time sync: {}".format(scout_sync.splitlines()[0]))
+
+    magnitude = abs(skew)
+    if precision >= CLOCK_SKEW_FAIL_SECONDS:
+        report.add(
+            "runtime.clock_skew",
+            "warn",
+            "Clock comparison too imprecise to judge",
+            details=details + ["The probe round trip was slower than the skew threshold; rerun on a quieter link."],
+            evidence=evidence,
+        )
+        return
+    if magnitude > CLOCK_SKEW_FAIL_SECONDS:
+        report.add(
+            "runtime.clock_skew",
+            "fail",
+            "Scout and companion clocks disagree enough to break TF",
+            details=details + ["Install chrony on both hosts and point them at the same source."],
+            evidence=evidence,
+        )
+        return
+    if magnitude > CLOCK_SKEW_WARN_SECONDS:
+        report.add(
+            "runtime.clock_skew",
+            "warn",
+            "Scout clock drift is approaching the TF tolerance",
+            details=details + ["Install chrony on both hosts and point them at the same source."],
+            evidence=evidence,
+        )
+        return
+
+    report.add(
+        "runtime.clock_skew",
+        "pass",
+        "Scout and companion clocks agree within the TF tolerance",
+        details=details,
+        evidence=evidence,
+    )
+
+
 def _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_probe_enabled):
     if not live_probe_enabled:
         report.add(
@@ -2193,6 +2325,7 @@ def add_runtime_checks(
         _add_scout_peer_hostname_resolution_check(report, site_config, runtime_profile, live_probe_enabled)
         _add_scout_serial_access_check(report, site_config, runtime_profile, live_probe_enabled)
         _add_scout_memory_pressure_check(report, site_config, runtime_profile, live_probe_enabled)
+        _add_clock_skew_check(report, site_config, effective_role, live_probe_enabled)
 
     if effective_role in ["companion", "system"]:
         _add_companion_checks(report, site_config, runtime_profile, effective_role)

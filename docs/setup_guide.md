@@ -65,6 +65,47 @@ Do not assume the first integration step is joining the Scout's ROS master over 
 - only vendor APIs
 - or a mixed surface where vendor APIs and a few ROS topics coexist
 
+## 3b. Clock Synchronization (Prerequisite)
+
+This is a distributed ROS 1 system: the Scout stamps `/odom`, `/tf`, and `/scan`, and the companion runs AMCL and both costmaps against those stamps. Both costmap configs set `transform_tolerance: 0.5`, so once the two clocks drift more than half a second apart, TF extrapolation fails and `move_base` stops planning. The errors point at TF, not at the clock, which makes this expensive to diagnose after the fact.
+
+Set this up before mapping, not after.
+
+```bash
+# On the Pi companion
+sudo apt-get install -y chrony
+sudo systemctl enable --now chrony
+
+# On the Scout (Debian Stretch era; apt sources point at archive.debian.org)
+sudo apt-get install -y chrony
+sudo systemctl enable --now chrony
+```
+
+The Scout has no RTC, so its clock can be far off after a reboot until chrony converges. If the Scout cannot reach the internet, point it at the Pi by adding to its `/etc/chrony/chrony.conf`:
+
+```text
+server auto-scout-pi5.local iburst
+```
+
+and allow the Scout's subnet on the Pi in `/etc/chrony/chrony.conf`:
+
+```text
+allow 192.168.0.0/24
+```
+
+Verify from the operator host:
+
+```bash
+# Should agree within a few hundred milliseconds
+ssh linaro@moorebot-scout.local date +%s.%N
+ssh automark@auto-scout-pi5.local date +%s.%N
+
+# Or let the validator measure it, latency-compensated
+./auto-scout validate system
+```
+
+`./auto-scout validate system` reports this as `runtime.clock_skew`: it passes under 0.25s, warns past that, and fails past 1.0s. The check compares the Scout reading against the midpoint of the local measurement interval so SSH round-trip latency cancels rather than showing up as drift.
+
 ## 4. LD19 Bring-Up
 
 For the LD19:

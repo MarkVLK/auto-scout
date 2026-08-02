@@ -8,7 +8,9 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Header
 
 from config_utils import load_scout_config
+from ld19_protocol import LD19_HEADER
 from ld19_protocol import LD19_PACKET_LENGTH
+from ld19_protocol import LD19_VER_LEN
 from ld19_protocol import LD19ScanAssembler
 from ld19_protocol import parse_ld19_packet
 from scout_runtime_config import load_site_config
@@ -56,6 +58,9 @@ class LD19LidarDriver:
             invert_scan=self.invert_scan,
         )
         self.last_scan_stamp = None
+        self.accepted_packets = 0
+        self.rejected_packets = 0
+        self.last_reject_report = None
 
         try:
             self.serial_port = serial.Serial(
@@ -86,8 +91,15 @@ class LD19LidarDriver:
         scan_msg.header.frame_id = self.frame_id
 
         scan_msg.angle_min = self.angle_min
-        scan_msg.angle_max = self.angle_max
+        # angle_max must describe the bearing of the LAST range, not one
+        # increment past it, or consumers that derive the beam count from
+        # (angle_max - angle_min) / angle_increment expect one range too many.
         scan_msg.angle_increment = scan_payload["angle_increment"]
+        beam_count = len(scan_payload["ranges"])
+        if beam_count > 1:
+            scan_msg.angle_max = self.angle_min + (beam_count - 1) * scan_msg.angle_increment
+        else:
+            scan_msg.angle_max = self.angle_min
         scan_msg.time_increment = 0.0
         if self.last_scan_stamp is not None:
             scan_msg.scan_time = max(0.0, (scan_time - self.last_scan_stamp).to_sec())
@@ -103,6 +115,35 @@ class LD19LidarDriver:
         self.last_scan_stamp = scan_time
         rospy.logdebug("Published scan with {} valid points".format(scan_payload["point_count"]))
 
+    def report_packet_health(self, period_seconds=60.0):
+        """Periodically log the CRC reject rate so wiring problems are visible."""
+        now = rospy.Time.now()
+        if self.last_reject_report is None:
+            self.last_reject_report = now
+            return
+        if (now - self.last_reject_report).to_sec() < period_seconds:
+            return
+
+        total = self.accepted_packets + self.rejected_packets
+        if total > 0:
+            reject_ratio = float(self.rejected_packets) / float(total)
+            message = "LD19 packets: {} accepted, {} rejected ({:.2%})".format(
+                self.accepted_packets,
+                self.rejected_packets,
+                reject_ratio,
+            )
+            # A healthy link rejects almost nothing. A sustained reject rate
+            # points at baud, wiring, or connector problems worth fixing before
+            # the scan is trusted for mapping.
+            if reject_ratio > 0.01:
+                rospy.logwarn(message)
+            else:
+                rospy.loginfo(message)
+
+        self.accepted_packets = 0
+        self.rejected_packets = 0
+        self.last_reject_report = now
+
     def run(self):
         """Main driver loop."""
         buffer = bytearray()
@@ -114,20 +155,28 @@ class LD19LidarDriver:
                     buffer.extend(data)
 
                 while len(buffer) >= LD19_PACKET_LENGTH:
-                    if buffer[0] != 0x54:
+                    # Resync on the two-byte header signature rather than the
+                    # 0x54 header alone. 0x54 occurs constantly inside distance
+                    # and intensity payload, so a header-only scan locks onto
+                    # mid-packet garbage regularly; the CRC inside
+                    # parse_ld19_packet is what finally rejects it.
+                    if buffer[0] != LD19_HEADER or buffer[1] != LD19_VER_LEN:
                         del buffer[0]
                         continue
 
                     packet = buffer[:LD19_PACKET_LENGTH]
                     parsed = parse_ld19_packet(packet)
                     if parsed is None:
+                        self.rejected_packets += 1
                         del buffer[0]
                         continue
 
                     del buffer[:LD19_PACKET_LENGTH]
+                    self.accepted_packets += 1
                     completed_scan = self.scan_assembler.add_packet(parsed)
                     if completed_scan is not None:
                         self.publish_scan(completed_scan, rospy.Time.now())
+                    self.report_packet_health()
             except serial.SerialException as e:
                 rospy.logerr("Serial communication error: {}".format(e))
                 break
