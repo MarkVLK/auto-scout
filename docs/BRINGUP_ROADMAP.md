@@ -1,0 +1,199 @@
+# Bring-Up Roadmap
+
+How to get from "code has never really run" to a validated device, in an order where each
+stage catches its own failures instead of deferring them.
+
+This complements `docs/AUTO_SCOUT_CHECKLIST.md`, which records what has already been
+proven on hardware. This document is about what has **not** been proven yet. Findings
+referenced as **F1**–**F16** are in `docs/CODE_REVIEW_2026-08.md`.
+
+Stage ordering principle: **anything that can be tested without the robot moving should be
+tested before the robot moves, and anything testable without the LiDAR should be tested
+before the harness exists.** Most of Stage 0 and Stage 1 can be done this week.
+
+---
+
+## Stage 0 — Fix what is already known broken
+
+No hardware required. Doing this first means later stages debug the robot, not the repo.
+
+- [ ] **F3** — Fix `_entry_size()` in `scripts/cleanup_ros_logs.py` to stop counting
+      directory inode sizes. Confirm `test_ros_log_cleanup.py` passes. Until this is
+      fixed, log retention on the Scout is unreliable in the direction that destroys the
+      evidence you will want.
+- [ ] **F2** — Add CRC8 validation to `parse_ld19_packet()`, and require
+      `packet[1] == 0x2C` before accepting a header candidate during resync. Add a unit
+      test with a deliberately corrupted packet.
+- [ ] **F4** — Add a `threading.Lock` around the decision paths in `scout_safety_filter.py`
+      and `scout_battery_dock_guard.py`.
+- [ ] **F5** — Gate `_reset_to_idle_if_recovered()` so it cannot fire during
+      `vendor_docking` or `map_return`. Add a regression test: enter `vendor_docking`,
+      feed a battery reading above the reset threshold, assert the mode holds.
+- [ ] **F6** — Clamp battery percent to `[0, 100]`; log and ignore anything outside it.
+- [ ] **F7** — Either set `base_global_planner` in `navigation.launch` or delete
+      `config/global_planner_params.yaml`.
+- [ ] **F9** — Publish `angle_max = angle_min + (len(ranges) - 1) * angle_increment`.
+- [ ] **F13** — Add `config/site_local.yaml` to `SYNC_EXCLUDES` in `deploy.py`.
+- [ ] **F12** — Install chrony on the Pi and the Scout, point both at the same source,
+      and add a clock-skew check to `check_scout_compatibility.py`. This one is cheap and
+      prevents a whole category of confusing TF failures later.
+- [ ] Regenerate the `README.md` directory listing, ideally from a script.
+- [ ] Run the full suite: `python3 -m pytest tests/ -q`. Target 125 passing.
+
+---
+
+## Stage 1 — Prove the base without the LiDAR
+
+The harness is not required for any of this. **This is the highest-value work available
+right now**, because it de-risks the odometry question — which is the single largest
+unknown in the project — before the harness exists.
+
+### 1a. Runtime health
+
+- [ ] Deploy: `./auto-scout deploy scout`, then `./auto-scout validate system`.
+- [ ] Confirm one `scout_core_runtime.py` process and that `/scout/tof`,
+      `/scout/imu/data`, `/odom`, `/tf`, `/scout/safety_state`, and
+      `/scout/battery_guard_state` are live.
+- [ ] Reboot the Scout. Confirm swap, the metrics timer, and the runtime all come back.
+- [ ] Let it idle 24 h. Check RSS drift on `scout_core_runtime.py`, and confirm the log
+      cleanup timer actually bounded the log directory (validates the Stage 0 F3 fix on
+      real data).
+- [ ] Confirm `/scout/cmd_vel_companion` stays silent with no planner running — no
+      periodic zero Twist. This is the 2026-04-28 regression; make sure it has not
+      returned.
+
+### 1b. Odometry ground truth — do this carefully, it gates everything
+
+**This resolves F1, and it is the most important measurement in the whole project.**
+Tape a tape measure to the floor. Drive manually via the iOS app.
+
+- [ ] Record a baseline: `rostopic echo -n 1 /odom` at rest.
+- [ ] Drive **forward exactly 1.0 m**. Record `/odom` `pose.position.x` and `y`.
+      - `x ≈ +1.0`, `y ≈ 0` → pose is in the standard frame. The bridge is correct.
+      - `y ≈ +1.0`, `x ≈ 0` → **pose is in the vendor y-forward frame and is not being
+        transformed.** The pose needs the same treatment as the twist, and it needs a
+        proper rotation rather than the current x/y swap. Mapping cannot work until this
+        is fixed.
+- [ ] Drive **backward 1.0 m**. Confirm it returns to near the origin — this catches
+      sign errors that a one-way test misses.
+- [ ] Rotate **90 degrees left in place**. Confirm yaw increases by ~pi/2 (ROS convention:
+      counter-clockwise positive). A decrease means the handedness reflection in **F1** is
+      live.
+- [ ] Confirm the pose is **cumulative, not per-tick delta**, despite the topic being
+      named `baselink_odom_relative`. Drive 1 m, stop, drive another 1 m: `x` should read
+      ~2.0, not ~1.0.
+- [ ] Drive a 2 m square back to the start and record closing error. This is your odometry
+      drift budget and it sets expectations for how much AMCL has to correct.
+- [ ] Repeat the square on every floor surface in the house. Mecanum slip on hard floors
+      is called out as an open risk in `VERIFIED_ARCHITECTURE.md` — quantify it now.
+
+Record all of this in `AUTO_SCOUT_CHECKLIST.md` with dates, matching the existing style.
+
+### 1c. Safety filter and battery guard, live
+
+- [ ] With `scan_watchdog_enabled: true` and no LiDAR, confirm the filter reports
+      `scan_unavailable` and blocks. This is the designed holding-mode behaviour.
+- [ ] Temporarily set `scan_watchdog_enabled: false` and publish a slow synthetic
+      `/scout/cmd_vel_planner`. Walk a hand into the ToF cone. Confirm the caution band
+      clamps speed and the emergency band publishes a stop. **Set it back to `true`
+      afterwards.**
+- [ ] Confirm exactly one stop per blocked episode, and that manual iOS driving is
+      unaffected while the filter is running.
+- [ ] Verify `/SensorNode/simple_battery_status` array indices against the app's displayed
+      battery percentage across at least three different charge levels. This is the
+      empirical check that **F6** exists to protect.
+- [ ] Test the dock handoff with `battery_guard_dry_run: true` first, staged next to the
+      dock. Only then test for real, with a hand on the robot.
+
+### 1d. Notifications
+
+- [ ] `./auto-scout notify test` end to end.
+- [ ] Confirm the deployed Scout's `config/site_local.yaml` contains **no** webhook URL
+      (validates the **F13** fix).
+- [ ] Force a resource alert and confirm cooldown behaves.
+
+---
+
+## Stage 2 — Harness
+
+Gated on hardware. See `hardware/lidar_harness/` for the parametric model and the
+measurement worksheet.
+
+- [ ] Fill in the measurement worksheet.
+- [ ] Print the fit check part. Iterate on the saddle curvature until it seats.
+- [ ] Print the full harness. Mount with foam tape and straps.
+- [ ] Confirm the scan plane clears the camera turret with the LiDAR spinning.
+- [ ] Strain-relieve the UART harness. Drive around manually and confirm nothing shifts.
+- [ ] **Measure and update `base_to_laser` in `urdf/scout.urdf`** — x, y, z, and yaw
+      relative to the robot's rotation centre. The current value is a placeholder that
+      puts the laser outside the robot's own footprint (**F11**).
+
+---
+
+## Stage 3 — First scans
+
+- [ ] `AUTO_SCOUT_ENABLE_LIDAR=true`, redeploy, confirm `/scan` at ~10 Hz.
+- [ ] Check `/scan` in RViz against a tape-measured room. Verify range accuracy at 1 m and
+      3 m, and that the zero-degree bearing points where you think it does. If the room
+      appears rotated, `invert_scan` or the URDF yaw is wrong.
+- [ ] With the CRC fix from Stage 0 in place, log the rejected-packet rate over 10 minutes.
+      A non-trivial rate means a wiring or baud problem worth fixing before mapping.
+- [ ] Park the robot and confirm no part of itself appears in the scan.
+- [ ] Confirm the safety filter transitions out of `scan_unavailable`, and that pulling
+      the LiDAR power re-blocks it within `scan_stale_timeout`.
+
+---
+
+## Stage 4 — Mapping
+
+- [ ] `AUTO_SCOUT_ENABLE_NAV_STACK=true`, launch `slam_mapping.launch`.
+- [ ] Before driving: `rosrun tf view_frames` and confirm one connected tree,
+      `map -> odom -> base_link -> base_laser`. Check `tf_monitor` for negative or
+      large delays — that is the **F12** clock-skew symptom.
+- [ ] Map one room by manual driving. Slowly. Verify walls come out straight and the loop
+      closes. Crooked or doubled walls at this point almost always mean **F1**, not
+      gmapping tuning.
+- [ ] Map a full floor. Save with `map_saver`, reload with `map_server`, and confirm it
+      renders correctly.
+
+---
+
+## Stage 5 — Localization and planning
+
+- [ ] `navigation.launch` with the saved map. Confirm AMCL converges from a set initial
+      pose, then from a wrong one.
+- [ ] Retune `inflation_radius` (**F11**) — expect to drop from 0.35 to ~0.15–0.20 before
+      doorways become passable.
+- [ ] Reconcile the `max_vel_x` conflict and fix the accel/stopping-distance mismatch
+      (**F11**) before any autonomous motion.
+- [ ] First autonomous goal: short, straight, in an open room, with a hand on the power.
+- [ ] Then goals through doorways, then across rooms.
+- [ ] Confirm the safety filter still stops planner commands mid-goal when the ToF trips.
+- [ ] Replace `navigation.dock_approach_waypoint: "charging_station"` with a real measured
+      pre-dock waypoint, and replace every placeholder room coordinate in
+      `config/scout_config.yaml`.
+
+---
+
+## Stage 6 — Missions
+
+- [ ] `./auto-scout run smoke-loop` as a dry run, then for real.
+- [ ] Low-battery map return: let the battery drop naturally rather than faking it, and
+      confirm the claim → drive → vendor-handoff sequence. Watch specifically for the
+      **F5** symptom — the guard dropping to `idle` mid-dock as the percent recovers.
+- [ ] Full patrol with media capture and Slack delivery.
+- [ ] Only then start on dog detection.
+
+---
+
+## Suggested order of attack
+
+Given that the harness is the blocker and everything else is not:
+
+1. **This week, no hardware:** Stage 0. It is all code, all testable, and it removes the
+   known-broken items from the picture.
+2. **This week, with the robot as-is:** Stage 1b. The odometry ground-truth test needs no
+   LiDAR and answers the biggest open question in the project. If the pose frame turns out
+   to be wrong, you want to know that now, not after a day of blaming gmapping.
+3. **When you have calipers in hand:** the harness worksheet, then print.
+4. **Everything else follows the stage order.**
